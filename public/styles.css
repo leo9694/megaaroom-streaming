@@ -309,6 +309,7 @@ video {
 }
 
 .upload-form input,
+.upload-form select,
 .upload-form textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
