@@ -472,10 +472,6 @@ async function loadPlaybackSource(entryId) {
     }
 
     const prep = (payload.preparation || []).find((entry) => entry.audioIndex === state.currentAudioIndex);
-    if (prep?.status === "error") {
-      showPlaybackStatus(prep.message || "Falha ao preparar a reprodução.");
-      return;
-    }
     const statusText = prep
       ? `${prep.message}${typeof prep.percent === "number" ? ` (${prep.percent}%)` : ""}`
       : payload.message || "Preparando versão compatível para reprodução...";
