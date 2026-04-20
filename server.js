@@ -518,63 +518,76 @@ async function prepareVariant(entry, analysis, audioIndex) {
     };
 
     try {
-      await runFfmpeg(
-        [
-          "-y",
-          "-i",
-          analysis.sourcePath,
-          "-map",
-          "0:v:0",
-          "-map",
-          mapAudio,
-          "-c:v",
-          "copy",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "192k",
-          "-movflags",
-          "+faststart",
-          tempPath
-        ],
-        handleProgress
-      );
-    } catch {
-      await runFfmpeg(
-        [
-          "-y",
-          "-i",
-          analysis.sourcePath,
-          "-map",
-          "0:v:0",
-          "-map",
-          mapAudio,
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-crf",
-          "23",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "192k",
-          "-movflags",
-          "+faststart",
-          tempPath
-        ],
-        handleProgress
-      );
-    }
+      try {
+        await runFfmpeg(
+          [
+            "-y",
+            "-i",
+            analysis.sourcePath,
+            "-map",
+            "0:v:0",
+            "-map",
+            mapAudio,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            tempPath
+          ],
+          handleProgress
+        );
+      } catch {
+        await runFfmpeg(
+          [
+            "-y",
+            "-i",
+            analysis.sourcePath,
+            "-map",
+            "0:v:0",
+            "-map",
+            mapAudio,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            tempPath
+          ],
+          handleProgress
+        );
+      }
 
-    fs.renameSync(tempPath, variant.filePath);
-    prepareStatus.set(jobKey, {
-      status: "ready",
-      percent: 100,
-      message: "Versão compatível pronta.",
-      audioIndex
-    });
-    return variant;
+      fs.renameSync(tempPath, variant.filePath);
+      prepareStatus.set(jobKey, {
+        status: "ready",
+        percent: 100,
+        message: "Versão compatível pronta.",
+        audioIndex
+      });
+      return variant;
+    } catch (error) {
+      if (fs.existsSync(tempPath)) {
+        fs.rmSync(tempPath, { force: true });
+      }
+      prepareStatus.set(jobKey, {
+        status: "error",
+        percent: 0,
+        message: `Falha na preparação: ${error.message}`,
+        audioIndex
+      });
+      throw error;
+    }
   })().finally(() => {
     prepareJobs.delete(jobKey);
   });
