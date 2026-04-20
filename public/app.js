@@ -580,6 +580,9 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
     title,
     subtitle,
     percent: 0,
+    uploadedBytes: 0,
+    totalBytes: calculateFormDataUploadSize(formData),
+    speedBytesPerSecond: 0,
     status: "uploading",
     message: "Conectando...",
     indeterminate: true,
@@ -617,6 +620,9 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
 
       updateUpload(upload.id, {
         percent,
+        uploadedBytes: typeof meta.loaded === "number" ? meta.loaded : upload.uploadedBytes,
+        totalBytes: typeof meta.total === "number" && meta.total > 0 ? meta.total : upload.totalBytes,
+        speedBytesPerSecond: typeof meta.speed === "number" ? meta.speed : upload.speedBytesPerSecond,
         status: "uploading",
         indeterminate: !meta.real,
         estimated: !meta.real,
@@ -628,6 +634,8 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
       if (result.ok) {
         updateUpload(upload.id, {
           percent: 100,
+          uploadedBytes: upload.totalBytes || upload.uploadedBytes,
+          speedBytesPerSecond: 0,
           status: "done",
           message: "Upload concluido.",
           indeterminate: false,
@@ -639,6 +647,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
       } else {
         updateUpload(upload.id, {
           percent: Math.max(upload.percent, 1),
+          speedBytesPerSecond: 0,
           status: "error",
           message: result.error || "Falha no upload.",
           indeterminate: false,
@@ -679,6 +688,10 @@ function renderUploadList() {
           <div class="progress-track">
             <div class="progress-fill ${upload.indeterminate ? "is-indeterminate" : ""}" style="width:${upload.percent}%"></div>
           </div>
+          <div class="upload-transfer-meta">
+            <span>${formatUploadedAmount(upload)}</span>
+            <span>${formatUploadSpeed(upload)}</span>
+          </div>
           <div class="upload-item-meta">
             <span>${upload.message}</span>
             <span>${uploadStatusLabel(upload.status)}</span>
@@ -709,25 +722,38 @@ function sendUploadRequest(url, formData, onProgress, onComplete) {
   const request = new XMLHttpRequest();
   request.open("POST", url, true);
   request.responseType = "json";
+  let startedAt = Date.now();
 
-  onProgress(1, { real: false, phase: "queued" });
+  onProgress(1, { real: false, phase: "queued", total: calculateFormDataUploadSize(formData) });
 
   request.upload.addEventListener("loadstart", () => {
-    onProgress(1, { real: false, phase: "loadstart" });
+    startedAt = Date.now();
+    onProgress(1, { real: false, phase: "loadstart", total: calculateFormDataUploadSize(formData) });
   });
 
   request.upload.addEventListener("progress", (event) => {
     if (!event.lengthComputable) {
       return;
     }
+    const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+    const speed = event.loaded / elapsedSeconds;
     onProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))), {
       real: true,
-      phase: "upload"
+      phase: "upload",
+      loaded: event.loaded,
+      total: event.total,
+      speed
     });
   });
 
   request.addEventListener("load", () => {
-    onProgress(100, { real: true, phase: "complete" });
+    onProgress(100, {
+      real: true,
+      phase: "complete",
+      loaded: calculateFormDataUploadSize(formData),
+      total: calculateFormDataUploadSize(formData),
+      speed: 0
+    });
     const payload = request.response || parseJsonSafely(request.responseText) || {};
     if (request.status >= 200 && request.status < 300) {
       onComplete({ ok: true, data: payload });
@@ -835,6 +861,58 @@ function formatFileLabel(name) {
   }
   const extension = name.split(".").pop();
   return extension ? extension.toUpperCase() : name;
+}
+
+function calculateFormDataUploadSize(formData) {
+  let total = 0;
+  for (const [, value] of formData.entries()) {
+    if (value instanceof File) {
+      total += value.size;
+      continue;
+    }
+    total += new Blob([String(value)]).size;
+  }
+  return total;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!value) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatUploadSpeed(upload) {
+  if (upload.status === "done") {
+    return "Finalizado";
+  }
+  if (upload.status === "error") {
+    return "Falhou";
+  }
+  if (!upload.speedBytesPerSecond || upload.estimated) {
+    return "Velocidade: aguardando...";
+  }
+  return `${formatBytes(upload.speedBytesPerSecond)}/s`;
+}
+
+function formatUploadedAmount(upload) {
+  const uploaded = upload.status === "done" ? upload.totalBytes || upload.uploadedBytes : upload.uploadedBytes;
+  const total = upload.totalBytes;
+  if (!total) {
+    return `${formatBytes(uploaded)} enviados`;
+  }
+  return `${formatBytes(uploaded)} / ${formatBytes(total)}`;
 }
 
 function uploadStatusLabel(status) {
