@@ -749,17 +749,24 @@ video {
 
 .related-item {
   display: grid;
-  grid-template-columns: 74px 1fr;
+  grid-template-columns: 1fr;
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
 }
 
 .related-thumb {
-  aspect-ratio: 2 / 3;
-  border-radius: 4px;
+  width: 100%;
+  min-height: 160px;
+  aspect-ratio: 16 / 9;
   background: linear-gradient(145deg, #5e1f1f, #173644 55%, #31353b);
   background-size: cover;
   background-position: center;
+}
+
+.related-copy {
+  padding: 0 13px 13px;
 }
 
 @media (max-width: 1120px) {
@@ -881,8 +888,11 @@ video {
   }
 
   .related-item {
-    grid-template-columns: 64px 1fr;
-    padding: 10px;
+    padding: 0;
+  }
+
+  .related-thumb {
+    min-height: 128px;
   }
 
   .poster-grid {

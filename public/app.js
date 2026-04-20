@@ -867,9 +867,9 @@ function buildPosterGradient(index, title) {
 
 function buildThumbStyle(item, index) {
   if (item.cover?.src) {
-    return `background-image:url("${item.cover.src}");background-size:cover;background-position:center;`;
+    return `background-image:linear-gradient(180deg, rgba(0,0,0,0.08), rgba(0,0,0,0.42)), url("${item.cover.src}");background-size:cover;background-position:center;`;
   }
-  return `background:${buildPosterGradient(index, item.title)};`;
+  return `background:${buildPosterGradient(index, item.title)};background-size:cover;background-position:center;`;
 }
 
 function setStatus(message, isError = false) {
