@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meu Streaming Pessoal</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <button id="brandButton" class="brand" type="button">MEGA<span>ROOM</span></button>
+          <nav class="main-nav">
+            <button class="nav-link is-active" data-nav="home" type="button">Inicio</button>
+            <button class="nav-link" data-nav="movie" type="button">Filmes</button>
+            <button class="nav-link" data-nav="series" type="button">Series</button>
+            <button class="nav-link" data-nav="recent" type="button">Recentes</button>
+          </nav>
+          <label class="search-box">
+            <input id="searchInput" type="search" placeholder="Pesquisar..." />
+          </label>
+        </div>
+      </header>
+
+      <main class="page">
+        <section id="homeView" class="view-home">
+          <section class="hero-banner">
+            <div class="hero-art" id="heroArt">
+              <div class="hero-overlay">
+                <p class="hero-kicker">Biblioteca pessoal</p>
+                <h1 id="heroTitle">Seu streaming particular, organizado como um catalogo de verdade.</h1>
+                <p id="heroText" class="hero-description">
+                  Suba filmes, temporadas completas, acompanhe uploads em paralelo e assista em qualquer maquina apontando
+                  para sua VPS.
+                </p>
+                <div class="hero-actions">
+                  <button id="heroPlayButton" class="hero-primary" type="button">Abrir destaque</button>
+                  <button id="heroScrollButton" class="hero-secondary" type="button">Ver catalogo</button>
+                </div>
+              </div>
+            </div>
+            <aside class="hero-side">
+              <section class="upload-card">
+                <div class="tabs">
+                  <button class="tab is-active" data-target="movieForm" type="button">Filme</button>
+                  <button class="tab" data-target="seriesForm" type="button">Serie</button>
+                </div>
+
+                <form id="movieForm" class="upload-form">
+                  <label>
+                    <span>Titulo opcional</span>
+                    <input name="title" type="text" placeholder="Se deixar vazio, usa o nome do arquivo" />
+                  </label>
+                  <label>
+                    <span>Genero</span>
+                    <input name="genre" type="text" placeholder="Acao, drama, suspense" />
+                  </label>
+                  <div class="inline-fields">
+                    <label>
+                      <span>Ano</span>
+                      <input name="year" type="text" placeholder="2026" />
+                    </label>
+                    <label>
+                      <span>Arquivo(s)</span>
+                      <input name="videos" type="file" accept="video/*,.mkv,.mp4,.avi,.mov,.webm" multiple required />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Capa opcional</span>
+                    <input name="cover" type="file" accept="image/*" />
+                  </label>
+                  <label>
+                    <span>Sinopse</span>
+                    <textarea name="synopsis" rows="3" placeholder="Resumo rapido do filme"></textarea>
+                  </label>
+                  <button type="submit" class="submit-btn">Enviar filme(s)</button>
+                </form>
+
+                <form id="seriesForm" class="upload-form hidden">
+                  <label>
+                    <span>Titulo da serie</span>
+                    <input name="title" type="text" placeholder="Ex: Reacher" required />
+                  </label>
+                  <label>
+                    <span>Genero</span>
+                    <input name="genre" type="text" placeholder="Acao, drama" />
+                  </label>
+                  <div class="inline-fields triple">
+                    <label>
+                      <span>Ano</span>
+                      <input name="year" type="text" placeholder="2026" />
+                    </label>
+                    <label>
+                      <span>Temporada</span>
+                      <input name="seasonNumber" type="number" min="1" value="1" />
+                    </label>
+                    <label>
+                      <span>Episodios</span>
+                      <input name="episodes" type="file" accept="video/*,.mkv,.mp4,.avi,.mov,.webm" multiple required />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Capa opcional</span>
+                    <input name="cover" type="file" accept="image/*" />
+                  </label>
+                  <label>
+                    <span>Sinopse</span>
+                    <textarea name="synopsis" rows="3" placeholder="Resumo da temporada"></textarea>
+                  </label>
+                  <button type="submit" class="submit-btn">Enviar temporada</button>
+                </form>
+
+                <p id="statusMessage" class="status-message"></p>
+              </section>
+
+              <section class="upload-activity">
+                <div class="panel-heading">
+                  <div>
+                    <p class="section-kicker">Uploads</p>
+                    <h3>Fila em andamento</h3>
+                  </div>
+                  <span id="activeUploadsBadge" class="count-pill">0 ativos</span>
+                </div>
+                <div id="uploadList" class="upload-list"></div>
+              </section>
+            </aside>
+          </section>
+
+          <section class="stats-row">
+            <article class="stat-card">
+              <span id="movieCount">0</span>
+              <small>Filmes no catalogo</small>
+            </article>
+            <article class="stat-card">
+              <span id="seriesCount">0</span>
+              <small>Series adicionadas</small>
+            </article>
+            <article class="stat-card">
+              <span id="episodeCount">0</span>
+              <small>Episodios disponiveis</small>
+            </article>
+          </section>
+
+          <section id="catalogAnchor" class="catalog-wrap">
+            <div class="section-header">
+              <div>
+                <p class="section-kicker">Catalogo</p>
+                <h2>Em destaque</h2>
+              </div>
+              <div class="filters">
+                <button class="filter is-active" data-filter="all" type="button">Tudo</button>
+                <button class="filter" data-filter="movie" type="button">Filmes</button>
+                <button class="filter" data-filter="series" type="button">Series</button>
+              </div>
+            </div>
+
+            <section id="featuredGrid" class="featured-grid"></section>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <p class="section-kicker">Recentes</p>
+                <h2>Ultimos adicionados</h2>
+              </div>
+            </div>
+            <section id="recentGrid" class="poster-grid"></section>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <p class="section-kicker">Filmes</p>
+                <h2>Biblioteca de filmes</h2>
+              </div>
+            </div>
+            <section id="movieGrid" class="poster-grid"></section>
+          </section>
+
+          <section class="section-block">
+            <div class="section-header">
+              <div>
+                <p class="section-kicker">Series</p>
+                <h2>Temporadas e episodios</h2>
+              </div>
+            </div>
+            <section id="seriesGrid" class="poster-grid"></section>
+          </section>
+        </section>
+
+        <section id="detailView" class="view-detail hidden">
+          <div class="detail-hero" id="detailHero">
+            <div class="detail-backdrop"></div>
+            <div class="detail-content">
+              <div class="detail-main">
+                <button id="backButton" class="back-btn" type="button">← Voltar ao catalogo</button>
+                <p id="detailBadge" class="section-kicker">Filme</p>
+                <h1 id="detailTitle">Titulo</h1>
+                <p id="detailMeta" class="detail-meta-line"></p>
+                <p id="detailSynopsis" class="detail-overview"></p>
+                <div class="playback-toolbar">
+                  <div id="playbackStatus" class="playback-status hidden"></div>
+                  <div id="audioSelector" class="audio-selector"></div>
+                </div>
+                <div class="detail-actions-row">
+                  <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
+                  <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
+                </div>
+                <div class="detail-player-wrap">
+                  <video id="detailPlayer" class="detail-player" controls preload="metadata"></video>
+                </div>
+              </div>
+              <aside class="detail-sidebar">
+                <section class="detail-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="section-kicker">Conteudo</p>
+                      <h3 id="detailPanelTitle">Detalhes</h3>
+                    </div>
+                  </div>
+                  <div id="episodePanel" class="episode-panel"></div>
+                </section>
+                <section class="detail-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="section-kicker">Mais no catalogo</p>
+                      <h3>Sugestoes</h3>
+                    </div>
+                  </div>
+                  <div id="relatedList" class="related-list"></div>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="emptyStateTemplate">
+      <div class="empty-state">
+        <h3>Nenhuma midia encontrada</h3>
+        <p>Adicione filmes ou series para preencher esta secao.</p>
+      </div>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

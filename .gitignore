@@ -1,0 +1,8 @@
+node_modules/
+.srv_out.log
+.srv_err.log
+.tmp_out.log
+.tmp_err.log
+streams/
+uploads/
+data/library.json

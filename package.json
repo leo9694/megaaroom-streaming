@@ -1,0 +1,15 @@
+{
+  "name": "personal-streaming",
+  "version": "1.0.0",
+  "description": "Sistema pessoal de streaming para filmes e series",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "multer": "^1.4.5-lts.1"
+  }
+}
