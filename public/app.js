@@ -24,6 +24,7 @@ const recentGrid = document.getElementById("recentGrid");
 const movieGrid = document.getElementById("movieGrid");
 const seriesGrid = document.getElementById("seriesGrid");
 const brandButton = document.getElementById("brandButton");
+const heroArt = document.getElementById("heroArt");
 const heroTitle = document.getElementById("heroTitle");
 const heroText = document.getElementById("heroText");
 const heroPlayButton = document.getElementById("heroPlayButton");
@@ -313,12 +314,18 @@ function renderHome() {
 
 function renderHero(item) {
   if (!item) {
+    heroArt.style.background = buildBackdrop(0, "Biblioteca pessoal");
+    heroArt.style.backgroundSize = "";
+    heroArt.style.backgroundPosition = "";
     heroTitle.textContent = "Seu streaming particular, organizado como um catalogo de verdade.";
     heroText.textContent = "Suba filmes, temporadas completas, acompanhe uploads em paralelo e assista em qualquer maquina apontando para sua VPS.";
     heroPlayButton.disabled = true;
     return;
   }
 
+  heroArt.style.background = buildBackdrop(0, item.title, item.cover?.src);
+  heroArt.style.backgroundSize = item.cover?.src ? "cover" : "";
+  heroArt.style.backgroundPosition = item.cover?.src ? "center" : "";
   heroTitle.textContent = item.title;
   heroText.textContent = item.synopsis || "Sem sinopse cadastrada.";
   heroPlayButton.disabled = false;
