@@ -6,7 +6,3 @@ node_modules/
 streams/
 uploads/
 data/library.json
-.env
-google-drive-credentials*.json
-service-account*.json
-cache/
