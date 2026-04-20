@@ -592,6 +592,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
 
   state.uploads.unshift(upload);
   renderUploadList();
+  const pollHandle = startServerUploadPolling(upload.id);
 
   let sawRealProgress = false;
   const fallbackTicker = window.setInterval(() => {
@@ -611,7 +612,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
   }, 1200);
 
   sendUploadRequest(
-    url,
+    `${url}?uploadId=${encodeURIComponent(upload.id)}`,
     formData,
     (percent, meta = {}) => {
       if (meta.real) {
@@ -631,6 +632,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
     },
     async (result) => {
       window.clearInterval(fallbackTicker);
+      window.clearInterval(pollHandle);
       if (result.ok) {
         updateUpload(upload.id, {
           percent: 100,
@@ -657,6 +659,44 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
       }
     }
   );
+}
+
+function startServerUploadPolling(uploadId) {
+  return window.setInterval(async () => {
+    const current = state.uploads.find((entry) => entry.id === uploadId);
+    if (!current || current.status !== "uploading") {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/uploads/status/${uploadId}`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = await response.json();
+      const serverPercent = typeof payload.percent === "number" ? payload.percent : current.percent;
+      const inferredUploadedBytes = current.totalBytes
+        ? Math.min(current.totalBytes, Math.round((serverPercent / 100) * current.totalBytes))
+        : current.uploadedBytes;
+
+      updateUpload(uploadId, {
+        percent: Math.max(current.percent, serverPercent),
+        uploadedBytes: Math.max(current.uploadedBytes, inferredUploadedBytes),
+        status: payload.status === "processing" ? "uploading" : current.status,
+        indeterminate: payload.status === "processing",
+        estimated: false,
+        message:
+          payload.status === "processing"
+            ? "Processando no servidor..."
+            : payload.status === "completed"
+              ? "Upload concluido."
+              : "Enviando..."
+      });
+    } catch {
+      // Silencioso: o upload principal continua pelo XHR
+    }
+  }, 900);
 }
 
 function renderUploadList() {

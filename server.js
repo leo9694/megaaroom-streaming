@@ -27,6 +27,7 @@ let libraryWriteQueue = Promise.resolve();
 const analysisCache = new Map();
 const prepareJobs = new Map();
 const prepareStatus = new Map();
+const uploadProgress = new Map();
 
 function createId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -113,6 +114,80 @@ function updateLibrary(mutator) {
     return result;
   });
   return libraryWriteQueue;
+}
+
+function markUploadProgress(uploadId, patch) {
+  if (!uploadId) {
+    return null;
+  }
+
+  const current = uploadProgress.get(uploadId) || {
+    uploadId,
+    status: "receiving",
+    receivedBytes: 0,
+    totalBytes: 0,
+    percent: 0,
+    updatedAt: Date.now()
+  };
+
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: Date.now()
+  };
+
+  if (typeof next.totalBytes === "number" && next.totalBytes > 0) {
+    next.percent = Math.max(0, Math.min(100, Math.round((next.receivedBytes / next.totalBytes) * 100)));
+  }
+
+  uploadProgress.set(uploadId, next);
+  return next;
+}
+
+function createUploadTracker(req, res, next) {
+  const uploadId = String(req.query.uploadId || "").trim();
+  if (!uploadId) {
+    next();
+    return;
+  }
+
+  const totalBytes = Number(req.headers["content-length"] || 0);
+  req.uploadId = uploadId;
+  markUploadProgress(uploadId, {
+    status: "receiving",
+    receivedBytes: 0,
+    totalBytes
+  });
+
+  req.on("data", (chunk) => {
+    const current = uploadProgress.get(uploadId);
+    markUploadProgress(uploadId, {
+      status: "receiving",
+      receivedBytes: (current?.receivedBytes || 0) + chunk.length
+    });
+  });
+
+  req.on("aborted", () => {
+    markUploadProgress(uploadId, { status: "aborted" });
+  });
+
+  res.on("finish", () => {
+    const current = uploadProgress.get(uploadId);
+    if (!current) {
+      return;
+    }
+
+    markUploadProgress(uploadId, {
+      status: res.statusCode >= 400 ? "error" : "completed",
+      receivedBytes: current.totalBytes || current.receivedBytes
+    });
+
+    setTimeout(() => {
+      uploadProgress.delete(uploadId);
+    }, 30000);
+  });
+
+  next();
 }
 
 async function removeDirectoryIfExists(targetPath, attempts = 5) {
@@ -549,6 +624,15 @@ app.get("/api/library", async (req, res) => {
   res.json(await readLibrary());
 });
 
+app.get("/api/uploads/status/:uploadId", (req, res) => {
+  const status = uploadProgress.get(req.params.uploadId);
+  if (!status) {
+    return res.status(404).json({ error: "Upload nao encontrado." });
+  }
+
+  return res.json(status);
+});
+
 app.get("/api/playback/:entryId", async (req, res) => {
   try {
     const library = await readLibrary();
@@ -598,25 +682,33 @@ app.get("/api/playback/:entryId", async (req, res) => {
   }
 });
 
-app.post("/api/upload/movie", upload.fields([{ name: "video", maxCount: 1 }, { name: "cover", maxCount: 1 }]), async (req, res) => {
-  const file = req.files?.video?.[0];
-  const coverFile = req.files?.cover?.[0] || null;
+app.post(
+  "/api/upload/movie",
+  createUploadTracker,
+  upload.fields([{ name: "video", maxCount: 1 }, { name: "cover", maxCount: 1 }]),
+  async (req, res) => {
+    const file = req.files?.video?.[0];
+    const coverFile = req.files?.cover?.[0] || null;
 
-  if (!file) {
-    return res.status(400).json({ error: "Selecione um arquivo de vídeo." });
+    if (!file) {
+      return res.status(400).json({ error: "Selecione um arquivo de vídeo." });
+    }
+
+    markUploadProgress(req.uploadId, { status: "processing" });
+
+    const item = buildMovieItem(file, req.body, coverFile);
+    await updateLibrary((library) => {
+      library.items.unshift(item);
+    });
+
+    queuePreparationForEntry(item.id).catch(() => {});
+    res.status(201).json({ item });
   }
-
-  const item = buildMovieItem(file, req.body, coverFile);
-  await updateLibrary((library) => {
-    library.items.unshift(item);
-  });
-
-  queuePreparationForEntry(item.id).catch(() => {});
-  res.status(201).json({ item });
-});
+);
 
 app.post(
   "/api/upload/series",
+  createUploadTracker,
   upload.fields([{ name: "episodes", maxCount: 100 }, { name: "cover", maxCount: 1 }]),
   async (req, res) => {
     const files = (req.files?.episodes || []).slice().sort((a, b) =>
@@ -629,6 +721,8 @@ app.post(
       await removeDirectoryIfExists(path.join(UPLOADS_DIR, req.uploadFolderName || ""));
       return res.status(400).json({ error: "Informe o título da série e envie pelo menos um episódio." });
     }
+
+    markUploadProgress(req.uploadId, { status: "processing" });
 
     const item = buildSeriesItem(files, { title, genre, year, synopsis, seasonNumber }, coverFile);
     await updateLibrary((library) => {
