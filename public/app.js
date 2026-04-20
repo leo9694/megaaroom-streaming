@@ -583,6 +583,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
     status: "uploading",
     message: "Conectando...",
     indeterminate: true,
+    estimated: true,
     createdAt: Date.now()
   };
 
@@ -596,12 +597,13 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
       return;
     }
 
-    const nextPercent = current.percent < 5 ? 5 : Math.min(current.percent + 4, 95);
+    const nextPercent = current.percent < 5 ? 5 : Math.min(current.percent + 2, 15);
     updateUpload(upload.id, {
       percent: nextPercent,
       status: "uploading",
       indeterminate: true,
-      message: nextPercent < 15 ? "Conectando..." : "Enviando para o servidor..."
+      estimated: true,
+      message: nextPercent < 10 ? "Conectando..." : "Aguardando progresso real do envio..."
     });
   }, 1200);
 
@@ -617,6 +619,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
         percent,
         status: "uploading",
         indeterminate: !meta.real,
+        estimated: !meta.real,
         message: percent >= 100 ? "Processando..." : meta.real ? "Enviando..." : "Conectando..."
       });
     },
@@ -627,7 +630,8 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
           percent: 100,
           status: "done",
           message: "Upload concluido.",
-          indeterminate: false
+          indeterminate: false,
+          estimated: false
         });
         setStatus(`Upload concluido: ${title}`);
         await loadLibrary(true);
@@ -637,7 +641,8 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
           percent: Math.max(upload.percent, 1),
           status: "error",
           message: result.error || "Falha no upload.",
-          indeterminate: false
+          indeterminate: false,
+          estimated: false
         });
         setStatus(result.error || `Falha ao enviar ${title}.`, true);
       }
@@ -669,7 +674,7 @@ function renderUploadList() {
               <strong>${escapeHtml(upload.title)}</strong>
               <p>${escapeHtml(upload.subtitle || (upload.kind === "movie" ? "Filme" : "Serie"))}</p>
             </div>
-            <span>${upload.percent}%</span>
+            <span>${upload.estimated && upload.status === "uploading" ? "~" : ""}${upload.percent}%</span>
           </div>
           <div class="progress-track">
             <div class="progress-fill ${upload.indeterminate ? "is-indeterminate" : ""}" style="width:${upload.percent}%"></div>
