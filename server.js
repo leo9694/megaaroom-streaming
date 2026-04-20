@@ -6,7 +6,6 @@ const multer = require("multer");
 const { execFile, spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static");
 const ffprobePath = require("ffprobe-static").path;
-const { google } = require("googleapis");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,15 +13,11 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const UPLOADS_DIR = path.join(ROOT, "uploads");
 const STREAMS_DIR = path.join(ROOT, "streams");
-const CACHE_DIR = path.join(ROOT, "cache");
-const DRIVE_CACHE_DIR = path.join(CACHE_DIR, "drive");
 const LIBRARY_FILE = path.join(DATA_DIR, "library.json");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(STREAMS_DIR, { recursive: true });
-fs.mkdirSync(CACHE_DIR, { recursive: true });
-fs.mkdirSync(DRIVE_CACHE_DIR, { recursive: true });
 
 if (!fs.existsSync(LIBRARY_FILE)) {
   fs.writeFileSync(LIBRARY_FILE, JSON.stringify({ items: [] }, null, 2));
@@ -33,7 +28,6 @@ const analysisCache = new Map();
 const prepareJobs = new Map();
 const prepareStatus = new Map();
 const uploadProgress = new Map();
-let driveApiPromise = null;
 
 function createId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -101,7 +95,6 @@ app.use((req, res, next) => {
 });
 app.use("/uploads", express.static(UPLOADS_DIR));
 app.use("/streams", express.static(STREAMS_DIR));
-app.use("/cache", express.static(CACHE_DIR));
 app.use(express.static(path.join(ROOT, "public")));
 
 async function readLibrary() {
@@ -202,139 +195,6 @@ function absolutePathToPublicSrc(filePath) {
   return `/${relative}`;
 }
 
-function isDriveConfigured() {
-  return Boolean(process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE || process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON);
-}
-
-function assertDriveConfigured() {
-  if (!isDriveConfigured()) {
-    const error = new Error(
-      "Google Drive nao configurado. Defina GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE ou GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON."
-    );
-    error.statusCode = 503;
-    throw error;
-  }
-}
-
-async function getDriveApi() {
-  assertDriveConfigured();
-  if (!driveApiPromise) {
-    driveApiPromise = (async () => {
-      const authConfig = {
-        scopes: ["https://www.googleapis.com/auth/drive.readonly"]
-      };
-
-      if (process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON) {
-        authConfig.credentials = JSON.parse(process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON);
-      } else {
-        authConfig.keyFile = process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE;
-      }
-
-      const auth = new google.auth.GoogleAuth(authConfig);
-      const authClient = await auth.getClient();
-      return google.drive({ version: "v3", auth: authClient });
-    })().catch((error) => {
-      driveApiPromise = null;
-      throw error;
-    });
-  }
-
-  return driveApiPromise;
-}
-
-function extractDriveId(input) {
-  const raw = String(input || "").trim();
-  if (!raw) {
-    return "";
-  }
-
-  const patterns = [
-    /\/d\/([a-zA-Z0-9_-]+)/,
-    /[?&]id=([a-zA-Z0-9_-]+)/,
-    /\/folders\/([a-zA-Z0-9_-]+)/
-  ];
-
-  for (const pattern of patterns) {
-    const match = raw.match(pattern);
-    if (match) {
-      return match[1];
-    }
-  }
-
-  return raw;
-}
-
-async function fetchDriveFile(fileId) {
-  const drive = await getDriveApi();
-  const response = await drive.files.get({
-    fileId,
-    fields: "id,name,mimeType,size,parents,thumbnailLink",
-    supportsAllDrives: true
-  });
-
-  return response.data;
-}
-
-async function fetchDriveFolderChildren(folderId) {
-  const drive = await getDriveApi();
-  const items = [];
-  let pageToken;
-
-  do {
-    const response = await drive.files.list({
-      q: `'${folderId}' in parents and trashed = false and mimeType contains 'video/'`,
-      fields: "nextPageToken, files(id,name,mimeType,size,thumbnailLink)",
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      pageSize: 1000,
-      pageToken,
-      orderBy: "name_natural"
-    });
-
-    items.push(...(response.data.files || []));
-    pageToken = response.data.nextPageToken;
-  } while (pageToken);
-
-  return items;
-}
-
-function getDriveCachePaths(fileId, originalName = "video") {
-  const safeName = sanitizeFilename(originalName || `${fileId}.bin`, `${fileId}.bin`);
-  const folder = path.join(DRIVE_CACHE_DIR, fileId);
-  const filePath = path.join(folder, safeName);
-  return {
-    folder,
-    filePath,
-    publicSrc: absolutePathToPublicSrc(filePath)
-  };
-}
-
-async function ensureDriveFileCached(fileId, originalName) {
-  const cachePaths = getDriveCachePaths(fileId, originalName);
-  if (fs.existsSync(cachePaths.filePath)) {
-    return cachePaths;
-  }
-
-  fs.mkdirSync(cachePaths.folder, { recursive: true });
-  const drive = await getDriveApi();
-  const response = await drive.files.get(
-    { fileId, alt: "media", supportsAllDrives: true },
-    { responseType: "stream" }
-  );
-
-  const tempPath = `${cachePaths.filePath}.download`;
-  await new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(tempPath);
-    response.data.pipe(writer);
-    response.data.on("error", reject);
-    writer.on("error", reject);
-    writer.on("finish", resolve);
-  });
-
-  await fsp.rename(tempPath, cachePaths.filePath);
-  return cachePaths;
-}
-
 async function removeDirectoryIfExists(targetPath, attempts = 5) {
   if (!targetPath || !fs.existsSync(targetPath)) {
     return true;
@@ -392,7 +252,6 @@ function buildMovieItem(file, body, coverFile) {
     folder: path.basename(path.dirname(file.path)),
     cover: coverToData(coverFile),
     video: {
-      sourceType: "local",
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
@@ -417,7 +276,6 @@ function buildSeriesItem(files, body, coverFile) {
       id: createId("episode"),
       episodeNumber: index + 1,
       title: titleFromFilename(file.originalname, `Episodio ${index + 1}`),
-      sourceType: "local",
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
@@ -434,88 +292,6 @@ function ensureImportFolder(req, coverFile, preferredFolderName) {
   const folderName = preferredFolderName || ensureRequestFolder(req);
   fs.mkdirSync(path.join(UPLOADS_DIR, folderName), { recursive: true });
   return folderName;
-}
-
-function buildDriveMovieItem(metadata, body, coverFile, folder) {
-  const providedTitle = (body.title || "").trim();
-  return {
-    id: createId("movie"),
-    type: "movie",
-    title: providedTitle || titleFromFilename(metadata.name, "Filme sem titulo"),
-    genre: (body.genre || "Nao informado").trim(),
-    year: (body.year || "").trim(),
-    synopsis: (body.synopsis || "Sem sinopse cadastrada.").trim(),
-    createdAt: new Date().toISOString(),
-    folder,
-    cover: coverToData(coverFile),
-    remoteSource: {
-      provider: "gdrive"
-    },
-    video: {
-      sourceType: "gdrive",
-      driveFileId: metadata.id,
-      originalName: metadata.name,
-      mimeType: metadata.mimeType || "video/*",
-      size: Number(metadata.size || 0),
-      src: null
-    }
-  };
-}
-
-function buildDriveSeriesItem(files, body, coverFile, folder) {
-  return {
-    id: createId("series"),
-    type: "series",
-    title: (body.title || "").trim() || "Serie importada",
-    genre: (body.genre || "Nao informado").trim(),
-    year: (body.year || "").trim(),
-    synopsis: (body.synopsis || "Sem sinopse cadastrada.").trim(),
-    createdAt: new Date().toISOString(),
-    seasonNumber: Number(body.seasonNumber) || 1,
-    folder,
-    cover: coverToData(coverFile),
-    remoteSource: {
-      provider: "gdrive",
-      folderId: body.sourceId
-    },
-    episodes: files.map((file, index) => ({
-      id: createId("episode"),
-      episodeNumber: index + 1,
-      title: titleFromFilename(file.name, `Episodio ${index + 1}`),
-      sourceType: "gdrive",
-      driveFileId: file.id,
-      originalName: file.name,
-      mimeType: file.mimeType || "video/*",
-      size: Number(file.size || 0),
-      src: null
-    }))
-  };
-}
-
-async function resolveEntrySource(entry) {
-  if (entry.sourceSrc) {
-    return {
-      path: publicSrcToAbsolutePath(entry.sourceSrc),
-      publicSrc: entry.sourceSrc,
-      kind: "local"
-    };
-  }
-
-  if (entry.driveFileId) {
-    const cachePaths = await ensureDriveFileCached(entry.driveFileId, entry.originalName || entry.title);
-    return {
-      path: cachePaths.filePath,
-      publicSrc: cachePaths.publicSrc,
-      kind: "gdrive-cache"
-    };
-  }
-
-  throw new Error("Origem da mídia não encontrada.");
-}
-
-function publicSrcToAbsolutePath(src) {
-  const relative = String(src || "").replace(/^\//, "").split("/").filter(Boolean);
-  return path.join(ROOT, ...relative);
 }
 
 function normalizeLanguage(code) {
@@ -560,8 +336,6 @@ function findEntryById(library, entryId) {
         kind: "movie",
         mediaId: item.id,
         parent: item,
-        driveFileId: item.video.driveFileId || null,
-        sourceType: item.video.sourceType || "local",
         originalName: item.video.originalName,
         sourceSrc: item.video.src,
         title: item.title
@@ -576,8 +350,6 @@ function findEntryById(library, entryId) {
         mediaId: item.id,
         parent: item,
         episode,
-        driveFileId: episode.driveFileId || null,
-        sourceType: episode.sourceType || "local",
         originalName: episode.originalName,
         sourceSrc: episode.src,
         title: `${item.title} - ${episode.title}`
@@ -925,65 +697,6 @@ app.get("/api/playback/:entryId", async (req, res) => {
 });
 
 app.post(
-  "/api/import/drive",
-  upload.fields([{ name: "cover", maxCount: 1 }]),
-  async (req, res) => {
-    try {
-      assertDriveConfigured();
-      const coverFile = req.files?.cover?.[0] || null;
-      const kind = String(req.body.kind || "movie").trim().toLowerCase();
-      const sourceId = extractDriveId(req.body.sourceId);
-
-      if (!sourceId) {
-        return res.status(400).json({ error: "Informe o ID ou link do Google Drive." });
-      }
-
-      if (kind === "movie") {
-        const metadata = await fetchDriveFile(sourceId);
-        if (!String(metadata.mimeType || "").startsWith("video/")) {
-          return res.status(400).json({ error: "O item informado no Google Drive nao parece ser um arquivo de video." });
-        }
-        const folder = ensureImportFolder(req, coverFile, `drive-${metadata.id}`);
-        const item = buildDriveMovieItem(metadata, req.body, coverFile, folder);
-        await updateLibrary((library) => {
-          library.items.unshift(item);
-        });
-        return res.status(201).json({ item });
-      }
-
-      if (kind === "series") {
-        const folderMetadata = await fetchDriveFile(sourceId);
-        if (folderMetadata.mimeType !== "application/vnd.google-apps.folder") {
-          return res.status(400).json({ error: "Para serie, informe o link ou ID de uma pasta do Google Drive." });
-        }
-        const files = await fetchDriveFolderChildren(sourceId);
-        if (!files.length) {
-          return res.status(400).json({ error: "Nenhum video encontrado nessa pasta do Google Drive." });
-        }
-
-        const folder = ensureImportFolder(req, coverFile, `drive-${sourceId}`);
-        const item = buildDriveSeriesItem(
-          files,
-          { ...req.body, sourceId, title: (req.body.title || "").trim() || folderMetadata.name },
-          coverFile,
-          folder
-        );
-        await updateLibrary((library) => {
-          library.items.unshift(item);
-        });
-        return res.status(201).json({ item });
-      }
-
-      return res.status(400).json({ error: "Tipo de importacao invalido." });
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({
-        error: error.message || "Falha ao importar do Google Drive."
-      });
-    }
-  }
-);
-
-app.post(
   "/api/upload/movie",
   createUploadTracker,
   upload.fields([{ name: "video", maxCount: 1 }, { name: "cover", maxCount: 1 }]),
@@ -1097,21 +810,7 @@ app.delete("/api/media/:id", async (req, res) => {
   const streamResults = await Promise.all(
     streamTargets.map((streamId) => removeDirectoryIfExists(path.join(STREAMS_DIR, streamId)))
   );
-  const driveCacheTargets = [];
-
-  if (removed.video?.driveFileId) {
-    driveCacheTargets.push(path.join(DRIVE_CACHE_DIR, removed.video.driveFileId));
-  }
-
-  for (const episode of removed.episodes || []) {
-    if (episode.driveFileId) {
-      driveCacheTargets.push(path.join(DRIVE_CACHE_DIR, episode.driveFileId));
-    }
-  }
-
-  const driveCacheResults = await Promise.all(driveCacheTargets.map((target) => removeDirectoryIfExists(target)));
-
-  if (!uploadRemoved || streamResults.some((result) => !result) || driveCacheResults.some((result) => !result)) {
+  if (!uploadRemoved || streamResults.some((result) => !result)) {
     return res.status(409).json({
       error: "A mídia foi removida do catálogo, mas os arquivos ainda estão em uso. Feche o player e tente apagar novamente em alguns segundos."
     });
@@ -1127,3 +826,4 @@ app.get("*", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
 });
+
