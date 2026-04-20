@@ -589,18 +589,39 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
   state.uploads.unshift(upload);
   renderUploadList();
 
+  let sawRealProgress = false;
+  const fallbackTicker = window.setInterval(() => {
+    const current = state.uploads.find((entry) => entry.id === upload.id);
+    if (!current || current.status !== "uploading" || sawRealProgress) {
+      return;
+    }
+
+    const nextPercent = current.percent < 5 ? 5 : Math.min(current.percent + 4, 95);
+    updateUpload(upload.id, {
+      percent: nextPercent,
+      status: "uploading",
+      indeterminate: true,
+      message: nextPercent < 15 ? "Conectando..." : "Enviando para o servidor..."
+    });
+  }, 1200);
+
   sendUploadRequest(
     url,
     formData,
-    (percent) => {
+    (percent, meta = {}) => {
+      if (meta.real) {
+        sawRealProgress = true;
+      }
+
       updateUpload(upload.id, {
         percent,
         status: "uploading",
-        indeterminate: false,
-        message: percent >= 100 ? "Processando..." : "Enviando..."
+        indeterminate: !meta.real,
+        message: percent >= 100 ? "Processando..." : meta.real ? "Enviando..." : "Conectando..."
       });
     },
     async (result) => {
+      window.clearInterval(fallbackTicker);
       if (result.ok) {
         updateUpload(upload.id, {
           percent: 100,
@@ -613,6 +634,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
         cleanupUploadLater(upload.id);
       } else {
         updateUpload(upload.id, {
+          percent: Math.max(upload.percent, 1),
           status: "error",
           message: result.error || "Falha no upload.",
           indeterminate: false
@@ -683,19 +705,24 @@ function sendUploadRequest(url, formData, onProgress, onComplete) {
   request.open("POST", url, true);
   request.responseType = "json";
 
+  onProgress(1, { real: false, phase: "queued" });
+
   request.upload.addEventListener("loadstart", () => {
-    onProgress(1);
+    onProgress(1, { real: false, phase: "loadstart" });
   });
 
   request.upload.addEventListener("progress", (event) => {
     if (!event.lengthComputable) {
       return;
     }
-    onProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+    onProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))), {
+      real: true,
+      phase: "upload"
+    });
   });
 
   request.addEventListener("load", () => {
-    onProgress(100);
+    onProgress(100, { real: true, phase: "complete" });
     const payload = request.response || parseJsonSafely(request.responseText) || {};
     if (request.status >= 200 && request.status < 300) {
       onComplete({ ok: true, data: payload });
