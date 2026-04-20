@@ -45,6 +45,7 @@
                 <div class="tabs">
                   <button class="tab is-active" data-target="movieForm" type="button">Filme</button>
                   <button class="tab" data-target="seriesForm" type="button">Serie</button>
+                  <button class="tab" data-target="driveForm" type="button">Drive</button>
                 </div>
 
                 <form id="movieForm" class="upload-form">
@@ -109,6 +110,47 @@
                     <textarea name="synopsis" rows="3" placeholder="Resumo da temporada"></textarea>
                   </label>
                   <button type="submit" class="submit-btn">Enviar temporada</button>
+                </form>
+
+                <form id="driveForm" class="upload-form hidden">
+                  <label>
+                    <span>Tipo</span>
+                    <select name="kind">
+                      <option value="movie">Filme do Drive</option>
+                      <option value="series">Serie por pasta</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>ID ou link do Google Drive</span>
+                    <input name="sourceId" type="text" placeholder="Cole o link do arquivo ou da pasta" required />
+                  </label>
+                  <label>
+                    <span>Titulo</span>
+                    <input name="title" type="text" placeholder="Opcional para filme, recomendado para serie" />
+                  </label>
+                  <label>
+                    <span>Genero</span>
+                    <input name="genre" type="text" placeholder="Acao, drama, suspense" />
+                  </label>
+                  <div class="inline-fields triple">
+                    <label>
+                      <span>Ano</span>
+                      <input name="year" type="text" placeholder="2026" />
+                    </label>
+                    <label>
+                      <span>Temporada</span>
+                      <input name="seasonNumber" type="number" min="1" value="1" />
+                    </label>
+                    <label>
+                      <span>Capa opcional</span>
+                      <input name="cover" type="file" accept="image/*" />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Sinopse</span>
+                    <textarea name="synopsis" rows="3" placeholder="Resumo da midia importada"></textarea>
+                  </label>
+                  <button type="submit" class="submit-btn">Importar do Google Drive</button>
                 </form>
 
                 <p id="statusMessage" class="status-message"></p>

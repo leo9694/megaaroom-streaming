@@ -13,6 +13,7 @@ const state = {
 const statusMessage = document.getElementById("statusMessage");
 const movieForm = document.getElementById("movieForm");
 const seriesForm = document.getElementById("seriesForm");
+const driveForm = document.getElementById("driveForm");
 const uploadList = document.getElementById("uploadList");
 const activeUploadsBadge = document.getElementById("activeUploadsBadge");
 const emptyStateTemplate = document.getElementById("emptyStateTemplate");
@@ -24,7 +25,6 @@ const recentGrid = document.getElementById("recentGrid");
 const movieGrid = document.getElementById("movieGrid");
 const seriesGrid = document.getElementById("seriesGrid");
 const brandButton = document.getElementById("brandButton");
-const heroArt = document.getElementById("heroArt");
 const heroTitle = document.getElementById("heroTitle");
 const heroText = document.getElementById("heroText");
 const heroPlayButton = document.getElementById("heroPlayButton");
@@ -236,6 +236,50 @@ seriesForm.addEventListener("submit", (event) => {
   setStatus("Upload da temporada iniciado.");
 });
 
+driveForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const sourceId = (form.elements.sourceId.value || "").trim();
+  const kind = (form.elements.kind.value || "movie").trim();
+
+  if (!sourceId) {
+    setStatus("Cole o link ou ID do Google Drive.", true);
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("kind", kind);
+  formData.append("sourceId", sourceId);
+  formData.append("title", form.elements.title.value || "");
+  formData.append("genre", form.elements.genre.value || "");
+  formData.append("year", form.elements.year.value || "");
+  formData.append("seasonNumber", form.elements.seasonNumber.value || "1");
+  formData.append("synopsis", form.elements.synopsis.value || "");
+
+  const coverFile = form.elements.cover.files?.[0];
+  if (coverFile) {
+    formData.append("cover", coverFile);
+  }
+
+  try {
+    setStatus("Importando metadados do Google Drive...");
+    const response = await fetch("/api/import/drive", {
+      method: "POST",
+      body: formData
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Nao foi possivel importar do Google Drive.");
+    }
+
+    form.reset();
+    setStatus(kind === "series" ? "Serie importada do Google Drive." : "Filme importado do Google Drive.");
+    await loadLibrary(true);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+});
+
 async function loadLibrary(silent = false) {
   try {
     const response = await fetch("/api/library", { cache: "no-store" });
@@ -314,18 +358,12 @@ function renderHome() {
 
 function renderHero(item) {
   if (!item) {
-    heroArt.style.background = buildBackdrop(0, "Biblioteca pessoal");
-    heroArt.style.backgroundSize = "";
-    heroArt.style.backgroundPosition = "";
     heroTitle.textContent = "Seu streaming particular, organizado como um catalogo de verdade.";
     heroText.textContent = "Suba filmes, temporadas completas, acompanhe uploads em paralelo e assista em qualquer maquina apontando para sua VPS.";
     heroPlayButton.disabled = true;
     return;
   }
 
-  heroArt.style.background = buildBackdrop(0, item.title, item.cover?.src);
-  heroArt.style.backgroundSize = item.cover?.src ? "cover" : "";
-  heroArt.style.backgroundPosition = item.cover?.src ? "center" : "";
   heroTitle.textContent = item.title;
   heroText.textContent = item.synopsis || "Sem sinopse cadastrada.";
   heroPlayButton.disabled = false;
