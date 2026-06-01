@@ -732,7 +732,7 @@ video {
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: auto auto minmax(90px, 1fr) auto auto 90px auto;
+  grid-template-columns: auto auto auto auto minmax(90px, 1fr) auto auto 90px auto;
   gap: 10px;
   align-items: center;
   padding: 16px;
@@ -748,6 +748,10 @@ video {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   font-weight: 800;
+}
+
+.player-skip-btn {
+  min-width: 54px;
 }
 
 .player-icon-btn:hover,
@@ -812,7 +816,7 @@ video {
 .subtitle-overlay {
   position: absolute;
   left: 50%;
-  bottom: 92px;
+  bottom: 104px;
   z-index: 2;
   width: min(88%, 980px);
   transform: translateX(-50%);
@@ -853,7 +857,7 @@ video {
 
 .custom-player:fullscreen .subtitle-overlay,
 .custom-player:-webkit-full-screen .subtitle-overlay {
-  bottom: calc(96px + env(safe-area-inset-bottom));
+  bottom: calc(112px + env(safe-area-inset-bottom));
 }
 
 .detail-sidebar {
@@ -1032,21 +1036,56 @@ video {
   }
 
   .player-controls {
-    grid-template-columns: auto auto 1fr auto auto;
-    gap: 8px;
+    grid-template-columns: auto auto auto minmax(68px, 1fr) auto auto auto;
+    grid-template-areas:
+      "seek seek seek seek seek seek seek"
+      "play back forward time cc vol full";
+    gap: 7px;
     padding: 12px;
+    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.9) 22%, rgba(0, 0, 0, 0.96));
+  }
+
+  #playToggle {
+    grid-area: play;
+  }
+
+  #backwardToggle {
+    grid-area: back;
+  }
+
+  #forwardToggle {
+    grid-area: forward;
+  }
+
+  #playerTime {
+    grid-area: time;
+  }
+
+  #subtitleToggle {
+    grid-area: cc;
+  }
+
+  #muteToggle {
+    grid-area: vol;
+  }
+
+  #fullscreenToggle {
+    grid-area: full;
   }
 
   .seek-slider {
-    grid-column: 1 / -1;
-    grid-row: 1;
+    grid-area: seek;
   }
 
   .player-icon-btn {
-    min-width: 44px;
+    min-width: 42px;
     min-height: 34px;
-    padding: 0 8px;
-    font-size: 0.82rem;
+    padding: 0 7px;
+    font-size: 0.78rem;
+  }
+
+  .player-skip-btn {
+    min-width: 46px;
   }
 
   .volume-slider {
@@ -1059,7 +1098,7 @@ video {
   }
 
   .subtitle-overlay {
-    bottom: 96px;
+    bottom: 118px;
     width: min(94%, 720px);
     font-size: clamp(1rem, 4vw, 1.4rem);
   }
@@ -1125,19 +1164,41 @@ video {
   }
 
   .player-controls {
-    grid-template-columns: auto 1fr auto auto;
+    grid-template-columns: auto auto auto 1fr auto auto;
+    grid-template-areas:
+      "seek seek seek seek seek seek"
+      "play back forward time cc full";
+    gap: 6px;
+    padding: 10px;
   }
 
   .player-time {
-    font-size: 0.78rem;
+    font-size: 0.72rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+
+  .player-icon-btn {
+    min-width: 38px;
+    min-height: 34px;
+    padding: 0 6px;
+  }
+
+  .player-skip-btn {
+    min-width: 42px;
   }
 
   #fullscreenToggle {
     display: inline-block;
   }
 
+  #muteToggle {
+    display: none;
+  }
+
   .subtitle-overlay {
-    bottom: 92px;
-    font-size: clamp(0.95rem, 4.5vw, 1.18rem);
+    bottom: 116px;
+    font-size: clamp(0.92rem, 4.2vw, 1.12rem);
   }
 }

@@ -43,6 +43,8 @@ const playbackStatus = document.getElementById("playbackStatus");
 const audioSelector = document.getElementById("audioSelector");
 const customPlayer = document.getElementById("customPlayer");
 const playToggle = document.getElementById("playToggle");
+const backwardToggle = document.getElementById("backwardToggle");
+const forwardToggle = document.getElementById("forwardToggle");
 const playerTime = document.getElementById("playerTime");
 const seekSlider = document.getElementById("seekSlider");
 const subtitleToggle = document.getElementById("subtitleToggle");
@@ -128,6 +130,14 @@ playToggle.addEventListener("click", () => {
     return;
   }
   detailPlayer.pause();
+});
+
+backwardToggle.addEventListener("click", () => {
+  skipPlayback(-10);
+});
+
+forwardToggle.addEventListener("click", () => {
+  skipPlayback(10);
 });
 
 detailPlayer.addEventListener("click", () => {
@@ -1133,6 +1143,14 @@ function updatePlayerControls() {
   muteToggle.textContent = detailPlayer.muted || detailPlayer.volume === 0 ? "Mute" : "Vol";
   fullscreenToggle.textContent = document.fullscreenElement ? "Sair" : "Tela";
   subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
+}
+
+function skipPlayback(seconds) {
+  const duration = Number.isFinite(detailPlayer.duration) ? detailPlayer.duration : 0;
+  const current = Number.isFinite(detailPlayer.currentTime) ? detailPlayer.currentTime : 0;
+  const nextTime = duration > 0 ? Math.min(duration, Math.max(0, current + seconds)) : Math.max(0, current + seconds);
+  detailPlayer.currentTime = nextTime;
+  updatePlayerControls();
 }
 
 async function toggleFullscreen() {
