@@ -291,7 +291,9 @@ function openMedia(id, fromRoute = false, preserveScroll = false) {
   state.currentMediaId = id;
   state.currentEpisodeId = item.type === "series" ? item.episodes[0]?.id || null : null;
   state.currentAudioIndex = 0;
-  state.currentSubtitleIndex = -1;
+  if (!preserveScroll) {
+    state.currentSubtitleIndex = -1;
+  }
   homeView.classList.add("hidden");
   detailView.classList.remove("hidden");
   renderDetail(item);
@@ -890,7 +892,6 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
   const supportedTracks = subtitleTracks.filter((track) => track.kind === "subtitles");
   if (!supportedTracks.length) {
     subtitleSelector.innerHTML = "";
-    state.currentSubtitleIndex = -1;
     return;
   }
 
@@ -922,21 +923,31 @@ function clearSubtitleTracks() {
 }
 
 function applySubtitleTracks(subtitleTracks) {
-  clearSubtitleTracks();
   const selected = subtitleTracks.find((track) => track.index === state.currentSubtitleIndex && track.status === "ready" && track.src);
   if (!selected) {
+    clearSubtitleTracks();
     Array.from(detailPlayer.textTracks || []).forEach((track) => {
       track.mode = "disabled";
     });
     return;
   }
 
+  const existing = detailPlayer.querySelector(`track[data-subtitle-index="${selected.index}"]`);
+  if (existing && existing.getAttribute("src") === selected.src) {
+    Array.from(detailPlayer.textTracks || []).forEach((track) => {
+      track.mode = track.label === existing.label ? "showing" : "disabled";
+    });
+    return;
+  }
+
+  clearSubtitleTracks();
   const trackElement = document.createElement("track");
   trackElement.kind = "subtitles";
   trackElement.label = selected.language || selected.title || "Legenda";
   trackElement.srclang = subtitleLanguageCode(selected.language);
   trackElement.src = selected.src;
   trackElement.default = true;
+  trackElement.dataset.subtitleIndex = String(selected.index);
   detailPlayer.appendChild(trackElement);
 
   trackElement.addEventListener("load", () => {
