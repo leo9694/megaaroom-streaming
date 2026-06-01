@@ -724,6 +724,8 @@ video {
   aspect-ratio: 16 / 9;
   background: #050607;
   max-width: 100%;
+  object-fit: contain;
+  object-position: center;
 }
 
 .player-controls {
@@ -739,6 +741,15 @@ video {
   background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.82));
   color: #fff;
   z-index: 3;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.custom-player.controls-hidden .player-controls {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
 }
 
 .player-icon-btn {
@@ -803,6 +814,37 @@ video {
   z-index: 4;
 }
 
+.subtitle-position-controls {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.subtitle-position-controls span {
+  color: #cfd3d7;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.subtitle-position-controls div {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.subtitle-adjust {
+  border: 0;
+  border-radius: 4px;
+  padding: 9px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+}
+
 .subtitle-option {
   width: 100%;
   border-radius: 4px;
@@ -816,7 +858,7 @@ video {
 .subtitle-overlay {
   position: absolute;
   left: 50%;
-  bottom: 104px;
+  bottom: var(--subtitle-bottom, 88px);
   z-index: 2;
   width: min(88%, 980px);
   transform: translateX(-50%);
@@ -857,7 +899,7 @@ video {
 
 .custom-player:fullscreen .subtitle-overlay,
 .custom-player:-webkit-full-screen .subtitle-overlay {
-  bottom: calc(112px + env(safe-area-inset-bottom));
+  bottom: calc(var(--subtitle-bottom, 88px) + env(safe-area-inset-bottom));
 }
 
 .detail-sidebar {
@@ -1098,7 +1140,6 @@ video {
   }
 
   .subtitle-overlay {
-    bottom: 118px;
     width: min(94%, 720px);
     font-size: clamp(1rem, 4vw, 1.4rem);
   }
@@ -1198,7 +1239,6 @@ video {
   }
 
   .subtitle-overlay {
-    bottom: 116px;
     font-size: clamp(0.92rem, 4.2vw, 1.12rem);
   }
 }

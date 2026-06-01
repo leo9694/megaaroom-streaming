@@ -11,6 +11,9 @@ const state = {
   currentSubtitleTracks: [],
   activeSubtitleTrack: null,
   subtitleCueHandler: null,
+  controlsHideTimer: null,
+  playerControlsVisible: true,
+  subtitleOffset: 4,
   playbackPollToken: 0
 };
 
@@ -42,6 +45,7 @@ const detailPlayer = document.getElementById("detailPlayer");
 const playbackStatus = document.getElementById("playbackStatus");
 const audioSelector = document.getElementById("audioSelector");
 const customPlayer = document.getElementById("customPlayer");
+const playerControls = customPlayer.querySelector(".player-controls");
 const playToggle = document.getElementById("playToggle");
 const backwardToggle = document.getElementById("backwardToggle");
 const forwardToggle = document.getElementById("forwardToggle");
@@ -151,16 +155,26 @@ detailPlayer.addEventListener("timeupdate", updatePlayerControls);
 detailPlayer.addEventListener("volumechange", updatePlayerControls);
 detailPlayer.addEventListener("ended", updatePlayerControls);
 
+detailPlayer.addEventListener("play", scheduleControlsHide);
+detailPlayer.addEventListener("pause", showPlayerControls);
+detailPlayer.addEventListener("ended", showPlayerControls);
+
 seekSlider.addEventListener("input", () => {
   if (!Number.isFinite(detailPlayer.duration) || detailPlayer.duration <= 0) {
     return;
   }
   detailPlayer.currentTime = (Number(seekSlider.value) / 1000) * detailPlayer.duration;
+  showPlayerControls();
 });
 
 subtitleToggle.addEventListener("click", (event) => {
   event.stopPropagation();
+  showPlayerControls(false);
   subtitleMenu.classList.toggle("hidden");
+  updateSubtitlePosition();
+  if (subtitleMenu.classList.contains("hidden")) {
+    scheduleControlsHide();
+  }
 });
 
 muteToggle.addEventListener("click", () => {
@@ -170,6 +184,7 @@ muteToggle.addEventListener("click", () => {
 volumeSlider.addEventListener("input", () => {
   detailPlayer.volume = Number(volumeSlider.value);
   detailPlayer.muted = detailPlayer.volume === 0;
+  showPlayerControls();
 });
 
 fullscreenToggle.addEventListener("click", () => {
@@ -177,10 +192,18 @@ fullscreenToggle.addEventListener("click", () => {
 });
 
 document.addEventListener("fullscreenchange", updatePlayerControls);
+window.addEventListener("resize", updateSubtitlePosition);
+
+["pointermove", "touchstart", "focusin"].forEach((eventName) => {
+  customPlayer.addEventListener(eventName, () => showPlayerControls(), { passive: true });
+});
+
+playerControls.addEventListener("click", () => showPlayerControls(), { passive: true });
 
 document.addEventListener("click", (event) => {
   if (!customPlayer.contains(event.target)) {
     subtitleMenu.classList.add("hidden");
+    updateSubtitlePosition();
   }
 });
 
@@ -1016,15 +1039,39 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
     })
   ];
 
-  subtitleMenu.innerHTML = options.join("");
+  subtitleMenu.innerHTML = `
+    ${options.join("")}
+    <div class="subtitle-position-controls">
+      <span>Posicao da legenda</span>
+      <div>
+        <button class="subtitle-adjust" data-subtitle-adjust="-10" type="button">Descer</button>
+        <button class="subtitle-adjust" data-subtitle-adjust="10" type="button">Subir</button>
+        <button class="subtitle-adjust" data-subtitle-reset="true" type="button">Resetar</button>
+      </div>
+    </div>
+  `;
   subtitleMenu.querySelectorAll("[data-subtitle-index]").forEach((button) => {
     button.addEventListener("click", () => {
       state.currentSubtitleIndex = Number(button.dataset.subtitleIndex);
       applySubtitleTracks(subtitleTracks);
       renderSubtitleSelector(entryId, subtitleTracks);
       subtitleMenu.classList.add("hidden");
+      updateSubtitlePosition();
     });
   });
+
+  subtitleMenu.querySelectorAll("[data-subtitle-adjust], [data-subtitle-reset]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.dataset.subtitleReset) {
+        state.subtitleOffset = 4;
+      } else {
+        state.subtitleOffset = Math.min(140, Math.max(-30, state.subtitleOffset + Number(button.dataset.subtitleAdjust || 0)));
+      }
+      updateSubtitlePosition();
+    });
+  });
+  updateSubtitlePosition();
 }
 
 function clearSubtitleTracks() {
@@ -1143,6 +1190,7 @@ function updatePlayerControls() {
   muteToggle.textContent = detailPlayer.muted || detailPlayer.volume === 0 ? "Mute" : "Vol";
   fullscreenToggle.textContent = document.fullscreenElement ? "Sair" : "Tela";
   subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
+  updateSubtitlePosition();
 }
 
 function skipPlayback(seconds) {
@@ -1150,7 +1198,43 @@ function skipPlayback(seconds) {
   const current = Number.isFinite(detailPlayer.currentTime) ? detailPlayer.currentTime : 0;
   const nextTime = duration > 0 ? Math.min(duration, Math.max(0, current + seconds)) : Math.max(0, current + seconds);
   detailPlayer.currentTime = nextTime;
+  showPlayerControls();
   updatePlayerControls();
+}
+
+function showPlayerControls(allowAutoHide = true) {
+  state.playerControlsVisible = true;
+  customPlayer.classList.remove("controls-hidden");
+  updateSubtitlePosition();
+  window.clearTimeout(state.controlsHideTimer);
+
+  if (allowAutoHide && !detailPlayer.paused && !subtitleMenu.classList.contains("hidden")) {
+    return;
+  }
+
+  if (allowAutoHide && !detailPlayer.paused) {
+    scheduleControlsHide();
+  }
+}
+
+function scheduleControlsHide() {
+  window.clearTimeout(state.controlsHideTimer);
+  if (detailPlayer.paused || !subtitleMenu.classList.contains("hidden")) {
+    return;
+  }
+
+  state.controlsHideTimer = window.setTimeout(() => {
+    state.playerControlsVisible = false;
+    customPlayer.classList.add("controls-hidden");
+    updateSubtitlePosition();
+  }, 5000);
+}
+
+function updateSubtitlePosition() {
+  const controlsHeight = state.playerControlsVisible ? Math.ceil(playerControls.getBoundingClientRect().height) : 0;
+  const baseGap = state.playerControlsVisible ? 2 : 18;
+  const bottom = Math.max(12, controlsHeight + baseGap + state.subtitleOffset);
+  customPlayer.style.setProperty("--subtitle-bottom", `${bottom}px`);
 }
 
 async function toggleFullscreen() {
