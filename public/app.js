@@ -160,12 +160,10 @@ volumeSlider.addEventListener("input", () => {
 });
 
 fullscreenToggle.addEventListener("click", () => {
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-    return;
-  }
-  customPlayer.requestFullscreen?.().catch(() => {});
+  toggleFullscreen();
 });
+
+document.addEventListener("fullscreenchange", updatePlayerControls);
 
 document.addEventListener("click", (event) => {
   if (!customPlayer.contains(event.target)) {
@@ -301,18 +299,43 @@ seriesForm.addEventListener("submit", (event) => {
   setStatus("Upload da temporada iniciado.");
 });
 
-async function loadLibrary(silent = false) {
+async function loadLibrary(silent = false, options = {}) {
+  const shouldSyncRoute = options.syncRoute !== false;
+
   try {
     const response = await fetch("/api/library", { cache: "no-store" });
     const data = await response.json();
     state.library = data.items || [];
     updateStats();
-    syncRoute();
+    if (shouldSyncRoute) {
+      syncRoute();
+    } else {
+      refreshVisibleLibraryParts();
+    }
   } catch {
     if (!silent) {
       setStatus("Nao foi possivel carregar a biblioteca.", true);
     }
   }
+}
+
+function refreshVisibleLibraryParts() {
+  if (state.currentView === "home") {
+    renderHome();
+    return;
+  }
+
+  if (state.currentView !== "detail" || !state.currentMediaId) {
+    return;
+  }
+
+  const item = state.library.find((entry) => entry.id === state.currentMediaId);
+  if (!item) {
+    navigateToHome();
+    return;
+  }
+
+  renderRelated(item);
 }
 
 function syncRoute() {
@@ -733,7 +756,7 @@ function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
           estimated: false
         });
         setStatus(`Upload concluido: ${title}`);
-        await loadLibrary(true);
+        await loadLibrary(true, { syncRoute: false });
         cleanupUploadLater(upload.id);
       } else {
         updateUpload(upload.id, {
@@ -1059,7 +1082,33 @@ function updatePlayerControls() {
   seekSlider.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : "0";
   volumeSlider.value = String(detailPlayer.muted ? 0 : detailPlayer.volume);
   muteToggle.textContent = detailPlayer.muted || detailPlayer.volume === 0 ? "Mute" : "Vol";
+  fullscreenToggle.textContent = document.fullscreenElement ? "Sair" : "Tela";
   subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    if (customPlayer.requestFullscreen) {
+      await customPlayer.requestFullscreen();
+      return;
+    }
+
+    if (detailPlayer.requestFullscreen) {
+      await detailPlayer.requestFullscreen();
+      return;
+    }
+
+    if (detailPlayer.webkitEnterFullscreen) {
+      detailPlayer.webkitEnterFullscreen();
+    }
+  } catch {
+    setStatus("Nao foi possivel abrir em tela cheia neste navegador.", true);
+  }
 }
 
 function formatTime(seconds) {
@@ -1185,5 +1234,5 @@ function escapeHtml(value) {
 renderUploadList();
 loadLibrary();
 setInterval(() => {
-  loadLibrary(true);
+  loadLibrary(true, { syncRoute: false });
 }, 15000);
