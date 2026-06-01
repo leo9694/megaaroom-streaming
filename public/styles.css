@@ -716,16 +716,18 @@ video {
   overflow: hidden;
   border-radius: 6px;
   background: #050607;
+  aspect-ratio: var(--player-aspect, 16 / 9);
 }
 
 .detail-player {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 100%;
+  aspect-ratio: auto;
   background: #050607;
   max-width: 100%;
   object-fit: contain;
-  object-position: center;
+  object-position: 50% 50%;
 }
 
 .player-controls {

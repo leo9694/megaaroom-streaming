@@ -150,7 +150,10 @@ detailPlayer.addEventListener("click", () => {
 
 detailPlayer.addEventListener("play", updatePlayerControls);
 detailPlayer.addEventListener("pause", updatePlayerControls);
-detailPlayer.addEventListener("loadedmetadata", updatePlayerControls);
+detailPlayer.addEventListener("loadedmetadata", () => {
+  updatePlayerAspect();
+  updatePlayerControls();
+});
 detailPlayer.addEventListener("timeupdate", updatePlayerControls);
 detailPlayer.addEventListener("volumechange", updatePlayerControls);
 detailPlayer.addEventListener("ended", updatePlayerControls);
@@ -1191,6 +1194,10 @@ function updatePlayerControls() {
   fullscreenToggle.textContent = document.fullscreenElement ? "Sair" : "Tela";
   subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
   updateSubtitlePosition();
+}
+
+function updatePlayerAspect() {
+  customPlayer.style.setProperty("--player-aspect", "16 / 9");
 }
 
 function skipPlayback(seconds) {
