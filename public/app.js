@@ -8,6 +8,7 @@ const state = {
   currentEpisodeId: null,
   currentAudioIndex: 0,
   currentSubtitleIndex: -1,
+  currentSubtitleTracks: [],
   playbackPollToken: 0
 };
 
@@ -38,7 +39,15 @@ const detailSynopsis = document.getElementById("detailSynopsis");
 const detailPlayer = document.getElementById("detailPlayer");
 const playbackStatus = document.getElementById("playbackStatus");
 const audioSelector = document.getElementById("audioSelector");
-const subtitleSelector = document.getElementById("subtitleSelector");
+const customPlayer = document.getElementById("customPlayer");
+const playToggle = document.getElementById("playToggle");
+const playerTime = document.getElementById("playerTime");
+const seekSlider = document.getElementById("seekSlider");
+const subtitleToggle = document.getElementById("subtitleToggle");
+const subtitleMenu = document.getElementById("subtitleMenu");
+const muteToggle = document.getElementById("muteToggle");
+const volumeSlider = document.getElementById("volumeSlider");
+const fullscreenToggle = document.getElementById("fullscreenToggle");
 const changeCoverButton = document.getElementById("changeCoverButton");
 const coverFileInput = document.getElementById("coverFileInput");
 const detailPanelTitle = document.getElementById("detailPanelTitle");
@@ -108,6 +117,60 @@ heroPlayButton.addEventListener("click", () => {
 
 backButton.addEventListener("click", () => {
   navigateToHome();
+});
+
+playToggle.addEventListener("click", () => {
+  if (detailPlayer.paused) {
+    detailPlayer.play().catch(() => {});
+    return;
+  }
+  detailPlayer.pause();
+});
+
+detailPlayer.addEventListener("click", () => {
+  playToggle.click();
+});
+
+detailPlayer.addEventListener("play", updatePlayerControls);
+detailPlayer.addEventListener("pause", updatePlayerControls);
+detailPlayer.addEventListener("loadedmetadata", updatePlayerControls);
+detailPlayer.addEventListener("timeupdate", updatePlayerControls);
+detailPlayer.addEventListener("volumechange", updatePlayerControls);
+detailPlayer.addEventListener("ended", updatePlayerControls);
+
+seekSlider.addEventListener("input", () => {
+  if (!Number.isFinite(detailPlayer.duration) || detailPlayer.duration <= 0) {
+    return;
+  }
+  detailPlayer.currentTime = (Number(seekSlider.value) / 1000) * detailPlayer.duration;
+});
+
+subtitleToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  subtitleMenu.classList.toggle("hidden");
+});
+
+muteToggle.addEventListener("click", () => {
+  detailPlayer.muted = !detailPlayer.muted;
+});
+
+volumeSlider.addEventListener("input", () => {
+  detailPlayer.volume = Number(volumeSlider.value);
+  detailPlayer.muted = detailPlayer.volume === 0;
+});
+
+fullscreenToggle.addEventListener("click", () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+    return;
+  }
+  customPlayer.requestFullscreen?.().catch(() => {});
+});
+
+document.addEventListener("click", (event) => {
+  if (!customPlayer.contains(event.target)) {
+    subtitleMenu.classList.add("hidden");
+  }
 });
 
 changeCoverButton.addEventListener("click", () => {
@@ -294,6 +357,7 @@ function openMedia(id, fromRoute = false, preserveScroll = false) {
   if (!preserveScroll) {
     state.currentSubtitleIndex = -1;
   }
+  state.currentSubtitleTracks = [];
   homeView.classList.add("hidden");
   detailView.classList.remove("hidden");
   renderDetail(item);
@@ -413,7 +477,9 @@ function renderDetail(item) {
   detailMeta.textContent = buildMeta(item);
   detailSynopsis.textContent = item.synopsis || "Sem sinopse cadastrada.";
   audioSelector.innerHTML = "";
-  subtitleSelector.innerHTML = "";
+  subtitleMenu.innerHTML = "";
+  subtitleMenu.classList.add("hidden");
+  subtitleToggle.disabled = true;
   clearSubtitleTracks();
   hidePlaybackStatus();
 
@@ -890,30 +956,37 @@ function buildThumbStyle(item, index) {
 
 function renderSubtitleSelector(entryId, subtitleTracks) {
   const supportedTracks = subtitleTracks.filter((track) => track.kind === "subtitles");
+  state.currentSubtitleTracks = subtitleTracks;
   if (!supportedTracks.length) {
-    subtitleSelector.innerHTML = "";
+    subtitleToggle.disabled = true;
+    subtitleToggle.classList.remove("is-active");
+    subtitleMenu.innerHTML = "";
+    subtitleMenu.classList.add("hidden");
     return;
   }
 
+  subtitleToggle.disabled = false;
+  subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
   const options = [
-    `<button class="subtitle-btn ${state.currentSubtitleIndex === -1 ? "is-active" : ""}" data-subtitle-index="-1" type="button">Legenda off</button>`,
+    `<button class="subtitle-option ${state.currentSubtitleIndex === -1 ? "is-active" : ""}" data-subtitle-index="-1" type="button">Desligada</button>`,
     ...supportedTracks.map((track) => {
       const name = formatSubtitleLabel(track);
       const label = track.status === "ready" ? name : `${name} preparando`;
       return `
-        <button class="subtitle-btn ${track.index === state.currentSubtitleIndex ? "is-active" : ""}" data-subtitle-index="${track.index}" type="button">
+        <button class="subtitle-option ${track.index === state.currentSubtitleIndex ? "is-active" : ""}" data-subtitle-index="${track.index}" type="button">
           ${escapeHtml(label)}
         </button>
       `;
     })
   ];
 
-  subtitleSelector.innerHTML = options.join("");
-  subtitleSelector.querySelectorAll("[data-subtitle-index]").forEach((button) => {
+  subtitleMenu.innerHTML = options.join("");
+  subtitleMenu.querySelectorAll("[data-subtitle-index]").forEach((button) => {
     button.addEventListener("click", () => {
       state.currentSubtitleIndex = Number(button.dataset.subtitleIndex);
       applySubtitleTracks(subtitleTracks);
       renderSubtitleSelector(entryId, subtitleTracks);
+      subtitleMenu.classList.add("hidden");
     });
   });
 }
@@ -929,6 +1002,7 @@ function applySubtitleTracks(subtitleTracks) {
     Array.from(detailPlayer.textTracks || []).forEach((track) => {
       track.mode = "disabled";
     });
+    subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
     return;
   }
 
@@ -975,6 +1049,28 @@ function formatSubtitleLabel(track) {
   const language = track.language || "Legenda";
   const title = track.title && !/^legenda\s+\d+$/i.test(track.title) ? track.title : "";
   return title ? `${language} - ${title}` : language;
+}
+
+function updatePlayerControls() {
+  playToggle.textContent = detailPlayer.paused ? "Play" : "Pause";
+  const current = Number.isFinite(detailPlayer.currentTime) ? detailPlayer.currentTime : 0;
+  const duration = Number.isFinite(detailPlayer.duration) ? detailPlayer.duration : 0;
+  playerTime.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+  seekSlider.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : "0";
+  volumeSlider.value = String(detailPlayer.muted ? 0 : detailPlayer.volume);
+  muteToggle.textContent = detailPlayer.muted || detailPlayer.volume === 0 ? "Mute" : "Vol";
+  subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
+}
+
+function formatTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function setStatus(message, isError = false) {

@@ -202,14 +202,23 @@
                 <div class="playback-toolbar">
                   <div id="playbackStatus" class="playback-status hidden"></div>
                   <div id="audioSelector" class="audio-selector"></div>
-                  <div id="subtitleSelector" class="subtitle-selector"></div>
                 </div>
                 <div class="detail-actions-row">
                   <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
                   <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
                 </div>
-                <div class="detail-player-wrap">
-                  <video id="detailPlayer" class="detail-player" controls preload="metadata"></video>
+                <div id="customPlayer" class="detail-player-wrap custom-player">
+                  <video id="detailPlayer" class="detail-player" preload="metadata"></video>
+                  <div class="player-controls">
+                    <button id="playToggle" class="player-icon-btn" type="button" aria-label="Reproduzir">Play</button>
+                    <div class="player-time" id="playerTime">0:00 / 0:00</div>
+                    <input id="seekSlider" class="player-slider seek-slider" type="range" min="0" max="1000" value="0" aria-label="Progresso do video" />
+                    <button id="subtitleToggle" class="player-icon-btn" type="button" aria-label="Legendas">CC</button>
+                    <div id="subtitleMenu" class="subtitle-menu hidden"></div>
+                    <button id="muteToggle" class="player-icon-btn" type="button" aria-label="Silenciar">Vol</button>
+                    <input id="volumeSlider" class="player-slider volume-slider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
+                    <button id="fullscreenToggle" class="player-icon-btn" type="button" aria-label="Tela cheia">Tela</button>
+                  </div>
                 </div>
               </div>
               <aside class="detail-sidebar">
