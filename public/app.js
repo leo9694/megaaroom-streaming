@@ -9,6 +9,8 @@ const state = {
   currentAudioIndex: 0,
   currentSubtitleIndex: -1,
   currentSubtitleTracks: [],
+  activeSubtitleTrack: null,
+  subtitleCueHandler: null,
   playbackPollToken: 0
 };
 
@@ -45,6 +47,7 @@ const playerTime = document.getElementById("playerTime");
 const seekSlider = document.getElementById("seekSlider");
 const subtitleToggle = document.getElementById("subtitleToggle");
 const subtitleMenu = document.getElementById("subtitleMenu");
+const subtitleOverlay = document.getElementById("subtitleOverlay");
 const muteToggle = document.getElementById("muteToggle");
 const volumeSlider = document.getElementById("volumeSlider");
 const fullscreenToggle = document.getElementById("fullscreenToggle");
@@ -1015,6 +1018,8 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
 }
 
 function clearSubtitleTracks() {
+  detachSubtitleCueHandler();
+  setSubtitleOverlayText("");
   detailPlayer.querySelectorAll("track").forEach((track) => track.remove());
 }
 
@@ -1031,9 +1036,7 @@ function applySubtitleTracks(subtitleTracks) {
 
   const existing = detailPlayer.querySelector(`track[data-subtitle-index="${selected.index}"]`);
   if (existing && existing.getAttribute("src") === selected.src) {
-    Array.from(detailPlayer.textTracks || []).forEach((track) => {
-      track.mode = track.label === existing.label ? "showing" : "disabled";
-    });
+    activateCustomSubtitleTrack(existing);
     return;
   }
 
@@ -1048,10 +1051,56 @@ function applySubtitleTracks(subtitleTracks) {
   detailPlayer.appendChild(trackElement);
 
   trackElement.addEventListener("load", () => {
-    Array.from(detailPlayer.textTracks || []).forEach((track) => {
-      track.mode = track.label === trackElement.label ? "showing" : "disabled";
-    });
+    activateCustomSubtitleTrack(trackElement);
   });
+
+  if (trackElement.track) {
+    activateCustomSubtitleTrack(trackElement);
+  }
+}
+
+function activateCustomSubtitleTrack(trackElement) {
+  detachSubtitleCueHandler();
+  const selectedTrack = trackElement.track;
+  if (!selectedTrack) {
+    return;
+  }
+
+  Array.from(detailPlayer.textTracks || []).forEach((track) => {
+    track.mode = track === selectedTrack ? "hidden" : "disabled";
+  });
+
+  state.activeSubtitleTrack = selectedTrack;
+  state.subtitleCueHandler = () => {
+    const cue = selectedTrack.activeCues?.[0];
+    setSubtitleOverlayText(cue ? subtitleCueText(cue) : "");
+  };
+
+  selectedTrack.addEventListener?.("cuechange", state.subtitleCueHandler);
+  state.subtitleCueHandler();
+}
+
+function detachSubtitleCueHandler() {
+  if (state.activeSubtitleTrack && state.subtitleCueHandler) {
+    state.activeSubtitleTrack.removeEventListener?.("cuechange", state.subtitleCueHandler);
+  }
+  state.activeSubtitleTrack = null;
+  state.subtitleCueHandler = null;
+}
+
+function setSubtitleOverlayText(text) {
+  subtitleOverlay.textContent = text || "";
+  subtitleOverlay.classList.toggle("hidden", !text);
+}
+
+function subtitleCueText(cue) {
+  if (typeof cue.getCueAsHTML === "function") {
+    const fragment = cue.getCueAsHTML();
+    const container = document.createElement("span");
+    container.appendChild(fragment);
+    return container.textContent || "";
+  }
+  return cue.text || "";
 }
 
 function subtitleLanguageCode(language) {

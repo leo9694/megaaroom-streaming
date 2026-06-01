@@ -809,6 +809,26 @@ video {
   font-weight: 700;
 }
 
+.subtitle-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  z-index: 2;
+  width: min(88%, 980px);
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  color: #fff;
+  font-size: clamp(1rem, 2.2vw, 1.75rem);
+  font-weight: 800;
+  line-height: 1.28;
+  text-align: center;
+  text-shadow:
+    0 2px 4px #000,
+    0 0 8px #000,
+    0 0 12px #000;
+  pointer-events: none;
+}
+
 .custom-player:fullscreen,
 .custom-player:-webkit-full-screen {
   width: 100vw;
@@ -829,6 +849,11 @@ video {
 .custom-player:fullscreen .player-controls,
 .custom-player:-webkit-full-screen .player-controls {
   padding: max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+}
+
+.custom-player:fullscreen .subtitle-overlay,
+.custom-player:-webkit-full-screen .subtitle-overlay {
+  bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
 .detail-sidebar {
@@ -1033,6 +1058,12 @@ video {
     bottom: 58px;
   }
 
+  .subtitle-overlay {
+    bottom: 96px;
+    width: min(94%, 720px);
+    font-size: clamp(1rem, 4vw, 1.4rem);
+  }
+
   #detailTitle {
     font-size: clamp(1.7rem, 10vw, 2.5rem);
   }
@@ -1103,5 +1134,10 @@ video {
 
   #fullscreenToggle {
     display: inline-block;
+  }
+
+  .subtitle-overlay {
+    bottom: 92px;
+    font-size: clamp(0.95rem, 4.5vw, 1.18rem);
   }
 }
