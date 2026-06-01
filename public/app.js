@@ -7,6 +7,7 @@ const state = {
   currentMediaId: null,
   currentEpisodeId: null,
   currentAudioIndex: 0,
+  currentSubtitleIndex: -1,
   playbackPollToken: 0
 };
 
@@ -37,6 +38,7 @@ const detailSynopsis = document.getElementById("detailSynopsis");
 const detailPlayer = document.getElementById("detailPlayer");
 const playbackStatus = document.getElementById("playbackStatus");
 const audioSelector = document.getElementById("audioSelector");
+const subtitleSelector = document.getElementById("subtitleSelector");
 const changeCoverButton = document.getElementById("changeCoverButton");
 const coverFileInput = document.getElementById("coverFileInput");
 const detailPanelTitle = document.getElementById("detailPanelTitle");
@@ -289,6 +291,7 @@ function openMedia(id, fromRoute = false, preserveScroll = false) {
   state.currentMediaId = id;
   state.currentEpisodeId = item.type === "series" ? item.episodes[0]?.id || null : null;
   state.currentAudioIndex = 0;
+  state.currentSubtitleIndex = -1;
   homeView.classList.add("hidden");
   detailView.classList.remove("hidden");
   renderDetail(item);
@@ -408,6 +411,8 @@ function renderDetail(item) {
   detailMeta.textContent = buildMeta(item);
   detailSynopsis.textContent = item.synopsis || "Sem sinopse cadastrada.";
   audioSelector.innerHTML = "";
+  subtitleSelector.innerHTML = "";
+  clearSubtitleTracks();
   hidePlaybackStatus();
 
   if (item.type === "movie") {
@@ -461,12 +466,21 @@ async function loadPlaybackSource(entryId) {
     }
 
     renderAudioSelector(entryId, payload.audioTracks || []);
+    renderSubtitleSelector(entryId, payload.subtitleTracks || []);
 
     if (payload.status === "ready") {
       hidePlaybackStatus();
       const absoluteSrc = new URL(payload.source, window.location.origin).href;
       if (detailPlayer.src !== absoluteSrc) {
         detailPlayer.src = payload.source;
+      }
+      applySubtitleTracks(payload.subtitleTracks || []);
+      if ((payload.subtitleTracks || []).some((track) => track.status === "preparing" || track.status === "idle")) {
+        window.setTimeout(() => {
+          if (token === state.playbackPollToken) {
+            loadPlaybackSource(entryId);
+          }
+        }, 2500);
       }
       return;
     }
@@ -870,6 +884,86 @@ function buildThumbStyle(item, index) {
     return `background-image:linear-gradient(180deg, rgba(0,0,0,0.08), rgba(0,0,0,0.42)), url("${item.cover.src}");background-size:cover;background-position:center;`;
   }
   return `background:${buildPosterGradient(index, item.title)};background-size:cover;background-position:center;`;
+}
+
+function renderSubtitleSelector(entryId, subtitleTracks) {
+  const supportedTracks = subtitleTracks.filter((track) => track.kind === "subtitles");
+  if (!supportedTracks.length) {
+    subtitleSelector.innerHTML = "";
+    state.currentSubtitleIndex = -1;
+    return;
+  }
+
+  const options = [
+    `<button class="subtitle-btn ${state.currentSubtitleIndex === -1 ? "is-active" : ""}" data-subtitle-index="-1" type="button">Legenda off</button>`,
+    ...supportedTracks.map((track) => {
+      const name = formatSubtitleLabel(track);
+      const label = track.status === "ready" ? name : `${name} preparando`;
+      return `
+        <button class="subtitle-btn ${track.index === state.currentSubtitleIndex ? "is-active" : ""}" data-subtitle-index="${track.index}" type="button">
+          ${escapeHtml(label)}
+        </button>
+      `;
+    })
+  ];
+
+  subtitleSelector.innerHTML = options.join("");
+  subtitleSelector.querySelectorAll("[data-subtitle-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.currentSubtitleIndex = Number(button.dataset.subtitleIndex);
+      applySubtitleTracks(subtitleTracks);
+      renderSubtitleSelector(entryId, subtitleTracks);
+    });
+  });
+}
+
+function clearSubtitleTracks() {
+  detailPlayer.querySelectorAll("track").forEach((track) => track.remove());
+}
+
+function applySubtitleTracks(subtitleTracks) {
+  clearSubtitleTracks();
+  const selected = subtitleTracks.find((track) => track.index === state.currentSubtitleIndex && track.status === "ready" && track.src);
+  if (!selected) {
+    Array.from(detailPlayer.textTracks || []).forEach((track) => {
+      track.mode = "disabled";
+    });
+    return;
+  }
+
+  const trackElement = document.createElement("track");
+  trackElement.kind = "subtitles";
+  trackElement.label = selected.language || selected.title || "Legenda";
+  trackElement.srclang = subtitleLanguageCode(selected.language);
+  trackElement.src = selected.src;
+  trackElement.default = true;
+  detailPlayer.appendChild(trackElement);
+
+  trackElement.addEventListener("load", () => {
+    Array.from(detailPlayer.textTracks || []).forEach((track) => {
+      track.mode = track.label === trackElement.label ? "showing" : "disabled";
+    });
+  });
+}
+
+function subtitleLanguageCode(language) {
+  const value = String(language || "").toLowerCase();
+  if (value.includes("portugu")) {
+    return "pt";
+  }
+  if (value.includes("ingl")) {
+    return "en";
+  }
+  if (value.includes("espan")) {
+    return "es";
+  }
+  return "und";
+}
+
+function formatSubtitleLabel(track) {
+  const language = track.language || "Legenda";
+  const title = track.title && !/^legenda\s+\d+$/i.test(track.title) ? track.title : "";
+  return title ? `${language} - ${title}` : language;
 }
 
 function setStatus(message, isError = false) {

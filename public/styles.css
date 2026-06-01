@@ -230,7 +230,8 @@ video {
 .related-item,
 .delete-btn,
 .tab,
-.audio-btn {
+.audio-btn,
+.subtitle-btn {
   border: 0;
   cursor: pointer;
 }
@@ -286,7 +287,8 @@ video {
 
 .tab.is-active,
 .filter.is-active,
-.audio-btn.is-active {
+.audio-btn.is-active,
+.subtitle-btn.is-active {
   background: var(--accent);
   color: white;
 }
@@ -595,7 +597,8 @@ video {
 .back-btn:hover,
 .episode-item:hover,
 .related-item:hover,
-.audio-btn:hover {
+.audio-btn:hover,
+.subtitle-btn:hover {
   filter: brightness(1.05);
 }
 
@@ -683,14 +686,16 @@ video {
   padding: 12px 14px;
 }
 
-.audio-selector {
+.audio-selector,
+.subtitle-selector {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   min-width: 0;
 }
 
-.audio-btn {
+.audio-btn,
+.subtitle-btn {
   border-radius: 4px;
   padding: 10px 14px;
   background: #23272d;
@@ -864,14 +869,16 @@ video {
   }
 
   .filters,
-  .audio-selector {
+  .audio-selector,
+  .subtitle-selector {
     display: grid;
     grid-template-columns: 1fr 1fr;
     width: 100%;
   }
 
   .filter,
-  .audio-btn {
+  .audio-btn,
+  .subtitle-btn {
     width: 100%;
   }
 
@@ -929,7 +936,8 @@ video {
   }
 
   .filters,
-  .audio-selector {
+  .audio-selector,
+  .subtitle-selector {
     grid-template-columns: 1fr;
   }
 

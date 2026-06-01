@@ -27,6 +27,8 @@ let libraryWriteQueue = Promise.resolve();
 const analysisCache = new Map();
 const prepareJobs = new Map();
 const prepareStatus = new Map();
+const subtitleJobs = new Map();
+const subtitleStatus = new Map();
 const uploadProgress = new Map();
 
 function createId(prefix) {
@@ -301,6 +303,14 @@ function normalizeLanguage(code) {
   return value;
 }
 
+function normalizeSubtitleKind(codec) {
+  const value = String(codec || "").toLowerCase();
+  if (["subrip", "ass", "ssa", "webvtt", "mov_text"].includes(value)) {
+    return "subtitles";
+  }
+  return "metadata";
+}
+
 function getPreferredAudioOrder(audioTracks) {
   const scored = audioTracks.map((track, index) => {
     const language = String(track.language || "").toLowerCase();
@@ -395,6 +405,16 @@ async function analyzePlayback(entry) {
       title: stream.tags?.title || `Faixa ${index + 1}`,
       channels: stream.channels || null
     }));
+  const subtitleTracks = (probe.streams || [])
+    .filter((stream) => stream.codec_type === "subtitle")
+    .map((stream, index) => ({
+      index,
+      ffmpegStreamIndex: stream.index,
+      codec: stream.codec_name || "unknown",
+      language: normalizeLanguage(stream.tags?.language),
+      title: stream.tags?.title || `Legenda ${index + 1}`,
+      kind: normalizeSubtitleKind(stream.codec_name)
+    }));
 
   const videoStream = (probe.streams || []).find((stream) => stream.codec_type === "video");
   const analysis = {
@@ -403,6 +423,7 @@ async function analyzePlayback(entry) {
     videoCodec: videoStream?.codec_name || "",
     durationSeconds: Number(probe.format?.duration || 0),
     audioTracks,
+    subtitleTracks,
     requiresPreparedStream:
       path.extname(sourcePath).toLowerCase() !== ".mp4" ||
       audioTracks.length > 1 ||
@@ -421,6 +442,102 @@ function getPreparedVariantPath(entryId, audioIndex) {
     filePath,
     publicSrc: `/streams/${entryId}/audio-${audioIndex}.mp4`
   };
+}
+
+function getPreparedSubtitlePath(entryId, subtitleIndex) {
+  const folder = path.join(STREAMS_DIR, entryId, "subtitles");
+  const filePath = path.join(folder, `subtitle-${subtitleIndex}.vtt`);
+  return {
+    folder,
+    filePath,
+    publicSrc: `/streams/${entryId}/subtitles/subtitle-${subtitleIndex}.vtt`
+  };
+}
+
+async function prepareSubtitle(entry, analysis, subtitleIndex) {
+  const track = analysis.subtitleTracks[subtitleIndex];
+  if (!track || track.kind !== "subtitles") {
+    return null;
+  }
+
+  const subtitle = getPreparedSubtitlePath(entry.entryId, subtitleIndex);
+  if (fs.existsSync(subtitle.filePath)) {
+    return subtitle;
+  }
+
+  const jobKey = `${entry.entryId}:subtitle:${subtitleIndex}`;
+  if (subtitleJobs.has(jobKey)) {
+    return subtitleJobs.get(jobKey);
+  }
+
+  const job = (async () => {
+    fs.mkdirSync(subtitle.folder, { recursive: true });
+    const tempPath = `${subtitle.filePath}.tmp.vtt`;
+    if (fs.existsSync(tempPath)) {
+      fs.rmSync(tempPath, { force: true });
+    }
+
+    subtitleStatus.set(jobKey, {
+      status: "preparing",
+      message: "Preparando legenda...",
+      subtitleIndex
+    });
+
+    try {
+      await runFfmpeg(
+        [
+          "-y",
+          "-i",
+          analysis.sourcePath,
+          "-map",
+          `0:${track.ffmpegStreamIndex}`,
+          "-c:s",
+          "webvtt",
+          tempPath
+        ]
+      );
+      fs.renameSync(tempPath, subtitle.filePath);
+      subtitleStatus.set(jobKey, {
+        status: "ready",
+        message: "Legenda pronta.",
+        subtitleIndex
+      });
+      return subtitle;
+    } catch (error) {
+      if (fs.existsSync(tempPath)) {
+        fs.rmSync(tempPath, { force: true });
+      }
+      subtitleStatus.set(jobKey, {
+        status: "error",
+        message: "Falha ao preparar legenda.",
+        subtitleIndex
+      });
+      throw error;
+    }
+  })().finally(() => {
+    subtitleJobs.delete(jobKey);
+  });
+
+  subtitleJobs.set(jobKey, job);
+  return job;
+}
+
+function getSubtitleSnapshot(entryId, subtitleTracks) {
+  return subtitleTracks.map((track) => {
+    const jobKey = `${entryId}:subtitle:${track.index}`;
+    const subtitle = getPreparedSubtitlePath(entryId, track.index);
+    const ready = track.kind === "subtitles" && fs.existsSync(subtitle.filePath);
+    return {
+      ...track,
+      status: ready ? "ready" : subtitleStatus.get(jobKey)?.status || (track.kind === "subtitles" ? "idle" : "unsupported"),
+      message:
+        ready
+          ? "Legenda pronta."
+          : subtitleStatus.get(jobKey)?.message ||
+            (track.kind === "subtitles" ? "Aguardando legenda." : "Formato de legenda nao suportado pelo navegador."),
+      src: ready ? subtitle.publicSrc : null
+    };
+  });
 }
 
 function runFfmpeg(args, onProgress) {
@@ -644,12 +761,19 @@ app.get("/api/playback/:entryId", async (req, res) => {
     const analysis = await analyzePlayback(entry);
     const requestedAudio = Number(req.query.audio || 0);
     const audioIndex = Math.max(0, Math.min(requestedAudio, Math.max(analysis.audioTracks.length - 1, 0)));
+    for (const subtitle of analysis.subtitleTracks) {
+      if (subtitle.kind === "subtitles") {
+        prepareSubtitle(entry, analysis, subtitle.index).catch(() => {});
+      }
+    }
+    const subtitleTracks = getSubtitleSnapshot(entry.entryId, analysis.subtitleTracks);
 
     if (!analysis.requiresPreparedStream) {
       return res.json({
         status: "ready",
         source: entry.sourceSrc,
         audioTracks: analysis.audioTracks,
+        subtitleTracks,
         selectedAudio: audioIndex,
         direct: true,
         preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
@@ -662,6 +786,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
         status: "ready",
         source: variant.publicSrc,
         audioTracks: analysis.audioTracks,
+        subtitleTracks,
         selectedAudio: audioIndex,
         direct: false,
         preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
@@ -673,6 +798,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
       status: "preparing",
       message: "Preparando versão compatível para reprodução.",
       audioTracks: analysis.audioTracks,
+      subtitleTracks,
       selectedAudio: audioIndex,
       direct: false,
       preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
