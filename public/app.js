@@ -14,6 +14,7 @@ const state = {
   controlsHideTimer: null,
   playerControlsVisible: true,
   subtitleOffset: 4,
+  videoOffset: 0,
   playbackPollToken: 0
 };
 
@@ -1019,19 +1020,10 @@ function buildThumbStyle(item, index) {
 function renderSubtitleSelector(entryId, subtitleTracks) {
   const supportedTracks = subtitleTracks.filter((track) => track.kind === "subtitles");
   state.currentSubtitleTracks = subtitleTracks;
-  if (!supportedTracks.length) {
-    subtitleToggle.disabled = true;
-    subtitleToggle.classList.remove("is-active");
-    subtitleMenu.innerHTML = "";
-    subtitleMenu.classList.add("hidden");
-    return;
-  }
-
   subtitleToggle.disabled = false;
   subtitleToggle.classList.toggle("is-active", state.currentSubtitleIndex !== -1);
-  const options = [
-    `<button class="subtitle-option ${state.currentSubtitleIndex === -1 ? "is-active" : ""}" data-subtitle-index="-1" type="button">Desligada</button>`,
-    ...supportedTracks.map((track) => {
+  const subtitleOptions = supportedTracks.length
+    ? supportedTracks.map((track) => {
       const name = formatSubtitleLabel(track);
       const label = track.status === "ready" ? name : `${name} preparando`;
       return `
@@ -1040,6 +1032,10 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
         </button>
       `;
     })
+    : [`<button class="subtitle-option" type="button" disabled>Sem legenda detectada</button>`];
+  const options = [
+    `<button class="subtitle-option ${state.currentSubtitleIndex === -1 ? "is-active" : ""}" data-subtitle-index="-1" type="button">Desligada</button>`,
+    ...subtitleOptions
   ];
 
   subtitleMenu.innerHTML = `
@@ -1050,6 +1046,14 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
         <button class="subtitle-adjust" data-subtitle-adjust="-10" type="button">Descer</button>
         <button class="subtitle-adjust" data-subtitle-adjust="10" type="button">Subir</button>
         <button class="subtitle-adjust" data-subtitle-reset="true" type="button">Resetar</button>
+      </div>
+    </div>
+    <div class="subtitle-position-controls">
+      <span>Enquadramento do video</span>
+      <div>
+        <button class="subtitle-adjust" data-video-adjust="8" type="button">Descer</button>
+        <button class="subtitle-adjust" data-video-adjust="-8" type="button">Subir</button>
+        <button class="subtitle-adjust" data-video-reset="true" type="button">Resetar</button>
       </div>
     </div>
   `;
@@ -1074,7 +1078,19 @@ function renderSubtitleSelector(entryId, subtitleTracks) {
       updateSubtitlePosition();
     });
   });
+  subtitleMenu.querySelectorAll("[data-video-adjust], [data-video-reset]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.dataset.videoReset) {
+        state.videoOffset = 0;
+      } else {
+        state.videoOffset = Math.min(120, Math.max(-120, state.videoOffset + Number(button.dataset.videoAdjust || 0)));
+      }
+      updateVideoPosition();
+    });
+  });
   updateSubtitlePosition();
+  updateVideoPosition();
 }
 
 function clearSubtitleTracks() {
@@ -1198,6 +1214,7 @@ function updatePlayerControls() {
 
 function updatePlayerAspect() {
   customPlayer.style.setProperty("--player-aspect", "16 / 9");
+  updateVideoPosition();
 }
 
 function skipPlayback(seconds) {
@@ -1242,6 +1259,10 @@ function updateSubtitlePosition() {
   const baseGap = state.playerControlsVisible ? 2 : 18;
   const bottom = Math.max(12, controlsHeight + baseGap + state.subtitleOffset);
   customPlayer.style.setProperty("--subtitle-bottom", `${bottom}px`);
+}
+
+function updateVideoPosition() {
+  customPlayer.style.setProperty("--video-offset", `${state.videoOffset}px`);
 }
 
 async function toggleFullscreen() {

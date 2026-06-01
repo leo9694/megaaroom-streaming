@@ -728,6 +728,8 @@ video {
   max-width: 100%;
   object-fit: contain;
   object-position: 50% 50%;
+  transform: translateY(var(--video-offset, 0px));
+  transition: transform 120ms ease;
 }
 
 .player-controls {
@@ -855,6 +857,11 @@ video {
   color: #fff;
   text-align: left;
   font-weight: 700;
+}
+
+.subtitle-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .subtitle-overlay {
