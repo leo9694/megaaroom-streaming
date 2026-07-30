@@ -446,13 +446,18 @@ async function analyzePlayback(entry) {
   return analysis;
 }
 
-function getPreparedVariantPath(entryId, audioIndex) {
+function getAudioTrackKey(track) {
+  return `stream-${track.ffmpegStreamIndex}`;
+}
+
+function getPreparedVariantPath(entryId, track) {
+  const trackKey = getAudioTrackKey(track);
   const folder = path.join(STREAMS_DIR, entryId);
-  const filePath = path.join(folder, `audio-${audioIndex}.mp4`);
+  const filePath = path.join(folder, `audio-${trackKey}.mp4`);
   return {
     folder,
     filePath,
-    publicSrc: `/streams/${entryId}/audio-${audioIndex}.mp4`
+    publicSrc: `/streams/${entryId}/audio-${trackKey}.mp4`
   };
 }
 
@@ -593,12 +598,17 @@ function runFfmpeg(args, onProgress) {
 }
 
 async function prepareVariant(entry, analysis, audioIndex) {
-  const variant = getPreparedVariantPath(entry.entryId, audioIndex);
+  const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
+  if (!selectedTrack) {
+    throw new Error("Nenhuma faixa de áudio compatível foi encontrada.");
+  }
+
+  const variant = getPreparedVariantPath(entry.entryId, selectedTrack);
   if (fs.existsSync(variant.filePath)) {
     return variant;
   }
 
-  const jobKey = `${entry.entryId}:${audioIndex}`;
+  const jobKey = `${entry.entryId}:audio:${getAudioTrackKey(selectedTrack)}`;
   if (prepareJobs.has(jobKey)) {
     return prepareJobs.get(jobKey);
   }
@@ -610,8 +620,7 @@ async function prepareVariant(entry, analysis, audioIndex) {
       fs.rmSync(tempPath, { force: true });
     }
 
-    const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
-    const mapAudio = selectedTrack ? `0:${selectedTrack.ffmpegStreamIndex}` : "0:a:0";
+    const mapAudio = `0:${selectedTrack.ffmpegStreamIndex}`;
 
     prepareStatus.set(jobKey, {
       status: "preparing",
@@ -700,8 +709,8 @@ async function prepareVariant(entry, analysis, audioIndex) {
 
 function getPreparationSnapshot(entryId, audioTracks) {
   return audioTracks.map((track) => {
-    const jobKey = `${entryId}:${track.index}`;
-    const variant = getPreparedVariantPath(entryId, track.index);
+    const jobKey = `${entryId}:audio:${getAudioTrackKey(track)}`;
+    const variant = getPreparedVariantPath(entryId, track);
     if (fs.existsSync(variant.filePath)) {
       return {
         audioIndex: track.index,
@@ -738,7 +747,7 @@ async function queuePreparationForEntry(entryId) {
     try {
       await prepareVariant(entry, analysis, track.index);
     } catch {
-      prepareStatus.set(`${entry.entryId}:${track.index}`, {
+      prepareStatus.set(`${entry.entryId}:audio:${getAudioTrackKey(track)}`, {
         status: "error",
         percent: 0,
         message: "Falha na preparação.",
@@ -791,7 +800,14 @@ app.get("/api/playback/:entryId", async (req, res) => {
       });
     }
 
-    const variant = getPreparedVariantPath(entry.entryId, audioIndex);
+    const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
+    if (!selectedTrack) {
+      return res.status(422).json({
+        error: "Nenhuma faixa em Português, Inglês ou no áudio original foi encontrada."
+      });
+    }
+
+    const variant = getPreparedVariantPath(entry.entryId, selectedTrack);
     if (fs.existsSync(variant.filePath)) {
       return res.json({
         status: "ready",
