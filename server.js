@@ -319,13 +319,16 @@ function getPreferredAudioOrder(audioTracks) {
       score = 0;
     } else if (language.includes("ingl")) {
       score = 10;
-    } else if (language.includes("espan")) {
-      score = 20;
     }
     return { track, score };
   });
 
   return scored.sort((a, b) => a.score - b.score).map((entry) => entry.track);
+}
+
+function isSupportedAudioTrack(track) {
+  const language = String(track.language || "").toLowerCase();
+  return language.includes("portugu") || language.includes("ingl");
 }
 
 function findEntryById(library, entryId) {
@@ -395,7 +398,7 @@ async function analyzePlayback(entry) {
   }
 
   const probe = await ffprobeJson(sourcePath);
-  const audioTracks = (probe.streams || [])
+  const detectedAudioTracks = (probe.streams || [])
     .filter((stream) => stream.codec_type === "audio")
     .map((stream, index) => ({
       index,
@@ -404,6 +407,12 @@ async function analyzePlayback(entry) {
       language: normalizeLanguage(stream.tags?.language),
       title: stream.tags?.title || `Faixa ${index + 1}`,
       channels: stream.channels || null
+    }));
+  const audioTracks = detectedAudioTracks
+    .filter(isSupportedAudioTrack)
+    .map((track, index) => ({
+      ...track,
+      index
     }));
   const subtitleTracks = (probe.streams || [])
     .filter((stream) => stream.codec_type === "subtitle")
@@ -426,7 +435,7 @@ async function analyzePlayback(entry) {
     subtitleTracks,
     requiresPreparedStream:
       path.extname(sourcePath).toLowerCase() !== ".mp4" ||
-      audioTracks.length > 1 ||
+      detectedAudioTracks.length > 1 ||
       (videoStream?.codec_name || "") !== "h264"
   };
 
@@ -722,19 +731,18 @@ async function queuePreparationForEntry(entryId) {
     return;
   }
 
-  const preferredTrack = getPreferredAudioOrder(analysis.audioTracks)[0];
-  if (!preferredTrack) {
-    return;
+  for (const track of getPreferredAudioOrder(analysis.audioTracks)) {
+    try {
+      await prepareVariant(entry, analysis, track.index);
+    } catch {
+      prepareStatus.set(`${entry.entryId}:${track.index}`, {
+        status: "error",
+        percent: 0,
+        message: "Falha na preparação.",
+        audioIndex: track.index
+      });
+    }
   }
-
-  prepareVariant(entry, analysis, preferredTrack.index).catch(() => {
-    prepareStatus.set(`${entry.entryId}:${preferredTrack.index}`, {
-      status: "error",
-      percent: 0,
-      message: "Falha na preparação.",
-      audioIndex: preferredTrack.index
-    });
-  });
 }
 
 app.get("/api/library", async (req, res) => {
