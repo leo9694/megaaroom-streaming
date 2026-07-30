@@ -644,7 +644,7 @@ function renderAudioSelector(entryId, audioTracks) {
     .map(
       (track) => `
         <button class="audio-btn ${track.index === state.currentAudioIndex ? "is-active" : ""}" data-audio-index="${track.index}" type="button">
-          ${escapeHtml(track.language || `Faixa ${track.index + 1}`)}
+          ${escapeHtml(track.displayLanguage || track.language || `Faixa ${track.index + 1}`)}
         </button>
       `
     )

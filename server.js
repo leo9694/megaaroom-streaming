@@ -319,6 +319,8 @@ function getPreferredAudioOrder(audioTracks) {
       score = 0;
     } else if (language.includes("ingl")) {
       score = 10;
+    } else if (track.isOriginal) {
+      score = 20;
     }
     return { track, score };
   });
@@ -328,7 +330,7 @@ function getPreferredAudioOrder(audioTracks) {
 
 function isSupportedAudioTrack(track) {
   const language = String(track.language || "").toLowerCase();
-  return language.includes("portugu") || language.includes("ingl");
+  return track.isOriginal || language.includes("portugu") || language.includes("ingl");
 }
 
 function findEntryById(library, entryId) {
@@ -406,13 +408,14 @@ async function analyzePlayback(entry) {
       codec: stream.codec_name || "unknown",
       language: normalizeLanguage(stream.tags?.language),
       title: stream.tags?.title || `Faixa ${index + 1}`,
-      channels: stream.channels || null
+      channels: stream.channels || null,
+      isOriginal: index === 0
     }));
-  const audioTracks = detectedAudioTracks
-    .filter(isSupportedAudioTrack)
+  const audioTracks = getPreferredAudioOrder(detectedAudioTracks.filter(isSupportedAudioTrack))
     .map((track, index) => ({
       ...track,
-      index
+      index,
+      displayLanguage: track.isOriginal ? `Original (${track.language})` : track.language
     }));
   const subtitleTracks = (probe.streams || [])
     .filter((stream) => stream.codec_type === "subtitle")
