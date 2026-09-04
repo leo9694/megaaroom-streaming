@@ -208,29 +208,31 @@
                   <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
                 </div>
                 <div id="customPlayer" class="detail-player-wrap custom-player">
-                  <video id="detailPlayer" class="detail-player" preload="metadata"></video>
-                  <div id="subtitleOverlay" class="subtitle-overlay hidden" aria-live="polite"></div>
-                  <div id="bufferingIndicator" class="buffering-indicator hidden" role="status">Carregando video...</div>
-                  <button id="centerPlayToggle" class="center-play-toggle" type="button" aria-label="Reproduzir video"></button>
-                  <div class="player-controls">
-                    <input id="seekSlider" class="player-slider seek-slider" type="range" min="0" max="1000" value="0" aria-label="Progresso do video" />
-                    <div class="player-controls-row">
-                      <div class="player-controls-left">
-                        <button id="playToggle" class="player-icon-btn" type="button" aria-label="Reproduzir" title="Reproduzir"></button>
-                        <button id="backwardToggle" class="player-icon-btn player-skip-btn" type="button" aria-label="Voltar 10 segundos" title="Voltar 10 segundos"></button>
-                        <button id="forwardToggle" class="player-icon-btn player-skip-btn" type="button" aria-label="Avancar 10 segundos" title="Avancar 10 segundos"></button>
-                        <button id="muteToggle" class="player-icon-btn" type="button" aria-label="Silenciar" title="Volume"></button>
-                        <input id="volumeSlider" class="player-slider volume-slider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
-                        <div class="player-time" id="playerTime">0:00 / 0:00</div>
+                  <div class="player-stage">
+                    <video id="detailPlayer" class="detail-player" preload="metadata"></video>
+                    <div id="subtitleOverlay" class="subtitle-overlay hidden" aria-live="polite"></div>
+                    <div id="bufferingIndicator" class="buffering-indicator hidden" role="status">Carregando video...</div>
+                    <button id="centerPlayToggle" class="center-play-toggle" type="button" aria-label="Reproduzir video"></button>
+                    <div class="player-controls">
+                      <input id="seekSlider" class="player-slider seek-slider" type="range" min="0" max="1000" value="0" aria-label="Progresso do video" />
+                      <div class="player-controls-row">
+                        <div class="player-controls-left">
+                          <button id="playToggle" class="player-icon-btn" type="button" aria-label="Reproduzir" title="Reproduzir"></button>
+                          <button id="backwardToggle" class="player-icon-btn player-skip-btn" type="button" aria-label="Voltar 10 segundos" title="Voltar 10 segundos"></button>
+                          <button id="forwardToggle" class="player-icon-btn player-skip-btn" type="button" aria-label="Avancar 10 segundos" title="Avancar 10 segundos"></button>
+                          <button id="muteToggle" class="player-icon-btn" type="button" aria-label="Silenciar" title="Volume"></button>
+                          <input id="volumeSlider" class="player-slider volume-slider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
+                          <div class="player-time" id="playerTime">0:00 / 0:00</div>
+                        </div>
+                        <div class="player-controls-right">
+                          <button id="subtitleToggle" class="player-icon-btn cc-toggle" type="button" aria-label="Legendas" title="Legendas">CC</button>
+                          <button id="qualityToggle" class="player-icon-btn quality-toggle" type="button" aria-label="Qualidade do video" title="Qualidade"><span class="quality-gear" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4L10.7 6A8 8 0 0 0 9 7L6.6 6l-2 3.4 2 1.5a7.7 7.7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 2.6h4l.3-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5zM13 15.4A3.4 3.4 0 1 1 13 8.6a3.4 3.4 0 0 1 0 6.8z"/></svg></span><span id="qualityLabel">Auto</span></button>
+                          <button id="fullscreenToggle" class="player-icon-btn" type="button" aria-label="Tela cheia" title="Tela cheia"></button>
+                        </div>
                       </div>
-                      <div class="player-controls-right">
-                        <button id="subtitleToggle" class="player-icon-btn cc-toggle" type="button" aria-label="Legendas" title="Legendas">CC</button>
-                        <button id="qualityToggle" class="player-icon-btn quality-toggle" type="button" aria-label="Qualidade do video" title="Qualidade"><span class="quality-gear" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4L10.7 6A8 8 0 0 0 9 7L6.6 6l-2 3.4 2 1.5a7.7 7.7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 2.6h4l.3-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5zM13 15.4A3.4 3.4 0 1 1 13 8.6a3.4 3.4 0 0 1 0 6.8z"/></svg></span><span id="qualityLabel">Auto</span></button>
-                        <button id="fullscreenToggle" class="player-icon-btn" type="button" aria-label="Tela cheia" title="Tela cheia"></button>
-                      </div>
+                      <div id="subtitleMenu" class="subtitle-menu hidden"></div>
+                      <div id="qualityMenu" class="quality-menu hidden"></div>
                     </div>
-                    <div id="subtitleMenu" class="subtitle-menu hidden"></div>
-                    <div id="qualityMenu" class="quality-menu hidden"></div>
                   </div>
                 </div>
               </div>

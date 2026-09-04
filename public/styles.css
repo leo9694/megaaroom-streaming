@@ -721,6 +721,13 @@ video {
   aspect-ratio: var(--player-aspect, 16 / 9);
 }
 
+.player-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #050607;
+}
+
 .detail-player {
   display: block;
   width: 100%;
@@ -1431,6 +1438,27 @@ video {
   .subtitle-overlay {
     font-size: clamp(0.92rem, 4.2vw, 1.12rem);
   }
+}
+
+.custom-player.force-landscape {
+  width: 100vw;
+  height: 100vh;
+  transform: none;
+}
+
+.custom-player.force-landscape .player-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  width: 100vh;
+  height: 100vw;
+  max-width: none;
+  max-height: none;
+  aspect-ratio: auto;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center;
 }
 
 @media (max-width: 760px) and (orientation: landscape) {

@@ -273,8 +273,28 @@ fullscreenToggle.addEventListener("click", () => {
   toggleFullscreen();
 });
 
-document.addEventListener("fullscreenchange", updatePlayerControls);
-window.addEventListener("resize", updateSubtitlePosition);
+function handleFullscreenChange() {
+  const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fullscreenElement) {
+    customPlayer.classList.remove("force-landscape");
+    try {
+      window.screen?.orientation?.unlock?.();
+    } catch {
+      // Alguns WebViews nao permitem controlar a orientacao.
+    }
+  }
+  updatePlayerControls();
+}
+
+document.addEventListener("fullscreenchange", handleFullscreenChange);
+document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+detailPlayer.addEventListener("webkitendfullscreen", handleFullscreenChange);
+window.addEventListener("resize", () => {
+  if (customPlayer.classList.contains("force-landscape") && window.innerWidth > window.innerHeight) {
+    customPlayer.classList.remove("force-landscape");
+  }
+  updateSubtitlePosition();
+});
 
 document.addEventListener("keydown", (event) => {
   if (state.currentView !== "detail" || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) {
@@ -1727,6 +1747,21 @@ function updateVideoPosition() {
   customPlayer.style.setProperty("--video-offset", `${state.videoOffset}px`);
 }
 
+async function requestMobileLandscape() {
+  if (!window.matchMedia("(max-width: 760px)").matches) {
+    return;
+  }
+  try {
+    if (window.screen?.orientation?.lock) {
+      await window.screen.orientation.lock("landscape");
+      return;
+    }
+  } catch {
+    // O fallback CSS cobre HTTP, WebViews antigos e rotacao bloqueada.
+  }
+  customPlayer.classList.add("force-landscape");
+}
+
 async function toggleFullscreen() {
   try {
     if (document.fullscreenElement) {
@@ -1736,11 +1771,15 @@ async function toggleFullscreen() {
 
     if (customPlayer.requestFullscreen) {
       await customPlayer.requestFullscreen();
+      await requestMobileLandscape();
+      window.setTimeout(handleFullscreenChange, 250);
       return;
     }
 
     if (detailPlayer.requestFullscreen) {
       await detailPlayer.requestFullscreen();
+      await requestMobileLandscape();
+      window.setTimeout(handleFullscreenChange, 250);
       return;
     }
 
