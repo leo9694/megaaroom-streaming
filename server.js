@@ -512,9 +512,9 @@ function getPreparedVariantPath(entryId, track) {
 }
 
 const HLS_RENDITIONS = [
-  { name: "1080p", height: 1080, maxRate: "4600k", bufferSize: "6500k", bandwidth: 4800000, level: "4.0", codec: "avc1.640028" },
-  { name: "720p", height: 720, maxRate: "2500k", bufferSize: "3500k", bandwidth: 2700000, level: "3.1", codec: "avc1.64001f" },
-  { name: "480p", height: 480, maxRate: "1250k", bufferSize: "1800k", bandwidth: 1400000, level: "3.0", codec: "avc1.64001e" }
+  { name: "1080p", width: 1920, height: 1080, maxRate: "4600k", bufferSize: "6500k", bandwidth: 4800000, level: "4.0", codec: "avc1.640028" },
+  { name: "720p", width: 1280, height: 720, maxRate: "2500k", bufferSize: "3500k", bandwidth: 2700000, level: "3.1", codec: "avc1.64001f" },
+  { name: "480p", width: 854, height: 480, maxRate: "1250k", bufferSize: "1800k", bandwidth: 1400000, level: "3.0", codec: "avc1.64001e" }
 ];
 
 function getHlsPaths(entryId, temporary = false) {
@@ -528,8 +528,11 @@ function getHlsPaths(entryId, temporary = false) {
 }
 
 function getHlsRenditions(analysis) {
+  const sourceWidth = analysis.width || 854;
   const sourceHeight = analysis.height || 480;
-  const eligible = HLS_RENDITIONS.filter((rendition) => rendition.height <= sourceHeight);
+  const eligible = HLS_RENDITIONS.filter(
+    (rendition) => rendition.width <= sourceWidth || rendition.height <= sourceHeight
+  );
   if (eligible.length) {
     return eligible.sort((a, b) => a.height - b.height);
   }
@@ -537,6 +540,7 @@ function getHlsRenditions(analysis) {
   const height = Math.max(2, sourceHeight - (sourceHeight % 2));
   return [{
     name: `${height}p`,
+    width: Math.max(2, (analysis.width || 854) - ((analysis.width || 854) % 2)),
     height,
     maxRate: "963k",
     bufferSize: "1350k",
@@ -546,11 +550,14 @@ function getHlsRenditions(analysis) {
   }];
 }
 
-function getHlsResolution(analysis, targetHeight) {
-  const sourceWidth = analysis.width || Math.round((targetHeight * 16) / 9);
-  const sourceHeight = analysis.height || targetHeight;
-  const scaledWidth = Math.round((sourceWidth * targetHeight) / sourceHeight / 2) * 2;
-  return { width: Math.max(2, scaledWidth), height: targetHeight };
+function getHlsResolution(analysis, rendition) {
+  const sourceWidth = analysis.width || rendition.width;
+  const sourceHeight = analysis.height || rendition.height;
+  const scale = Math.min(1, rendition.width / sourceWidth, rendition.height / sourceHeight);
+  return {
+    width: Math.max(2, Math.floor((sourceWidth * scale) / 2) * 2),
+    height: Math.max(2, Math.floor((sourceHeight * scale) / 2) * 2)
+  };
 }
 
 function hlsLanguageCode(language) {
@@ -586,7 +593,7 @@ function buildHlsMasterPlaylist(analysis, renditions) {
 
   // Menor qualidade primeiro: o player inicia rapido e sobe conforme a banda medida.
   for (const rendition of [...renditions].sort((a, b) => a.height - b.height)) {
-    const resolution = getHlsResolution(analysis, rendition.height);
+    const resolution = getHlsResolution(analysis, rendition);
     const audioGroup = analysis.audioTracks.length ? ',AUDIO="audio"' : "";
     lines.push(
       `#EXT-X-STREAM-INF:BANDWIDTH=${rendition.bandwidth},AVERAGE-BANDWIDTH=${Math.round(rendition.bandwidth * 0.88)},RESOLUTION=${resolution.width}x${resolution.height},CODECS="${rendition.codec},mp4a.40.2"${audioGroup}`
@@ -617,7 +624,7 @@ async function ensureHlsDiskSpace(sourcePath, analysis, renditions) {
 function readHlsQualities(masterPath) {
   try {
     const playlist = fs.readFileSync(masterPath, "utf8");
-    return [...playlist.matchAll(/RESOLUTION=\d+x(\d+)/g)]
+    return [...playlist.matchAll(/#EXT-X-STREAM-INF:[^\n]*\n(?:\.\/)?(\d+)p\/index\.m3u8/g)]
       .map((match) => Number(match[1]))
       .filter((height, index, values) => Number.isFinite(height) && values.indexOf(height) === index)
       .sort((a, b) => b - a);
@@ -630,12 +637,13 @@ function getHlsSnapshot(entryId) {
   const hls = getHlsPaths(entryId);
   if (fs.existsSync(hls.masterPath)) {
     const status = hlsStatus.get(entryId);
+    const diskQualities = readHlsQualities(hls.masterPath);
     return {
       status: "ready",
       percent: 100,
       message: "Streaming adaptativo pronto.",
       source: hls.publicSrc,
-      qualities: status?.qualities?.length ? status.qualities : readHlsQualities(hls.masterPath)
+      qualities: diskQualities.length ? diskQualities : status?.qualities || []
     };
   }
   return hlsStatus.get(entryId) || {
@@ -649,14 +657,16 @@ function getHlsSnapshot(entryId) {
 
 async function prepareHls(entry, analysis) {
   const finalHls = getHlsPaths(entry.entryId);
-  if (fs.existsSync(finalHls.masterPath)) {
+  const renditions = getHlsRenditions(analysis);
+  const existingQualities = readHlsQualities(finalHls.masterPath);
+  const hasEveryRendition = renditions.every((rendition) => existingQualities.includes(rendition.height));
+  if (fs.existsSync(finalHls.masterPath) && hasEveryRendition) {
     return finalHls;
   }
   if (hlsJobs.has(entry.entryId)) {
     return hlsJobs.get(entry.entryId);
   }
 
-  const renditions = getHlsRenditions(analysis);
   hlsStatus.set(entry.entryId, {
     status: "processing",
     percent: 0,
@@ -709,12 +719,13 @@ async function prepareHls(entry, analysis) {
 
     for (const rendition of renditions) {
       const videoFolder = path.join(tempHls.folder, rendition.name);
+      const resolution = getHlsResolution(analysis, rendition);
       fs.mkdirSync(videoFolder, { recursive: true });
       updateProgress(`Gerando qualidade ${rendition.name}...`, 0);
       await runFfmpeg([
         "-y", "-i", analysis.sourcePath,
         "-map", "0:v:0", "-an",
-        "-vf", `scale=-2:${rendition.height}`,
+        "-vf", `scale=${resolution.width}:${resolution.height}`,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
         "-maxrate", rendition.maxRate, "-bufsize", rendition.bufferSize,
         "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", rendition.level,
@@ -1133,7 +1144,9 @@ app.get("/api/playback/:entryId", async (req, res) => {
         ? fallbackVariant.publicSrc
         : null;
     let hls = getHlsSnapshot(entry.entryId);
-    if (hls.status === "idle") {
+    const expectedQualities = getHlsRenditions(analysis).map((rendition) => rendition.height);
+    const needsQualityUpgrade = expectedQualities.some((height) => !hls.qualities.includes(height));
+    if (hls.status === "idle" || needsQualityUpgrade) {
       enqueuePreparationForEntry(entry.entryId).catch(() => {});
       hls = getHlsSnapshot(entry.entryId);
     }

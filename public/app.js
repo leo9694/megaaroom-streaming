@@ -831,7 +831,7 @@ function attachHlsPlayback(entryId, payload) {
     hls.loadSource(payload.source);
     hls.attachMedia(detailPlayer);
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-      renderQualitySelector(hls.levels.map((level, levelIndex) => ({ height: level.height, levelIndex })));
+      renderQualitySelector(hls.levels.map((level, levelIndex) => ({ height: getQualityLabelHeight(level), levelIndex })));
       if (hls.audioTracks.length) {
         hls.audioTrack = Math.min(state.currentAudioIndex, hls.audioTracks.length - 1);
       }
@@ -844,7 +844,7 @@ function attachHlsPlayback(entryId, payload) {
       }
     });
     hls.on(window.Hls.Events.LEVEL_SWITCHED, (_event, data) => {
-      state.currentHlsHeight = hls.levels[data.level]?.height || Number(state.qualityMode) || 0;
+      state.currentHlsHeight = getQualityLabelHeight(hls.levels[data.level]) || Number(state.qualityMode) || 0;
       renderQualitySelector(state.hlsQualities);
     });
     hls.on(window.Hls.Events.ERROR, (_event, data) => handleHlsError(data, payload));
@@ -996,6 +996,15 @@ function renderQualitySelector(qualities) {
       scheduleControlsHide();
     });
   });
+}
+
+function getQualityLabelHeight(level) {
+  const width = Number(level?.width || 0);
+  const height = Number(level?.height || 0);
+  if (width >= 1900 || height >= 1000) return 1080;
+  if (width >= 1200 || height >= 700) return 720;
+  if (width >= 800 || height >= 450) return 480;
+  return height;
 }
 
 function pollHlsStatus(entryId, token) {
