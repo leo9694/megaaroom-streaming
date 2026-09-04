@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
@@ -6,6 +7,7 @@ const multer = require("multer");
 const { execFile, spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static");
 const ffprobePath = require("ffprobe-static").path;
+const hlsJsPath = require.resolve("hls.js/dist/hls.min.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,6 +16,9 @@ const DATA_DIR = path.join(ROOT, "data");
 const UPLOADS_DIR = path.join(ROOT, "uploads");
 const STREAMS_DIR = path.join(ROOT, "streams");
 const LIBRARY_FILE = path.join(DATA_DIR, "library.json");
+const APP_USERNAME = process.env.APP_USERNAME || "";
+const APP_PASSWORD = process.env.APP_PASSWORD || "";
+const accessProtectionEnabled = Boolean(APP_USERNAME && APP_PASSWORD);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -27,6 +32,10 @@ let libraryWriteQueue = Promise.resolve();
 const analysisCache = new Map();
 const prepareJobs = new Map();
 const prepareStatus = new Map();
+const hlsJobs = new Map();
+const hlsStatus = new Map();
+let mediaProcessingQueue = Promise.resolve();
+const queuedPreparationJobs = new Map();
 const subtitleJobs = new Map();
 const subtitleStatus = new Map();
 const uploadProgress = new Map();
@@ -90,13 +99,52 @@ const coverUpload = multer({ storage: coverStorage });
 
 app.use(express.json({ limit: "2mb" }));
 app.use((req, res, next) => {
+  if (!accessProtectionEnabled) {
+    next();
+    return;
+  }
+
+  const authorization = req.get("authorization") || "";
+  const encoded = authorization.startsWith("Basic ") ? authorization.slice(6) : "";
+  let credentials = "";
+  try {
+    credentials = Buffer.from(encoded, "base64").toString("utf8");
+  } catch {
+    credentials = "";
+  }
+  const expected = `${APP_USERNAME}:${APP_PASSWORD}`;
+  const providedBuffer = Buffer.from(credentials);
+  const expectedBuffer = Buffer.from(expected);
+  const authorized = providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+  if (authorized) {
+    next();
+    return;
+  }
+
+  res.set("WWW-Authenticate", 'Basic realm="MegaRoom", charset="UTF-8"');
+  res.status(401).send("Autenticacao necessaria.");
+});
+app.use((req, res, next) => {
   if (!req.path.startsWith("/uploads/") && !req.path.startsWith("/streams/")) {
     res.set("Cache-Control", "no-store");
   }
   next();
 });
+app.get("/vendor/hls.min.js", (req, res) => {
+  res.set("Cache-Control", "private, max-age=31536000, immutable");
+  res.sendFile(hlsJsPath);
+});
 app.use("/uploads", express.static(UPLOADS_DIR));
-app.use("/streams", express.static(STREAMS_DIR));
+app.use("/streams", express.static(STREAMS_DIR, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith(".m3u8")) {
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+      res.setHeader("Cache-Control", "no-cache");
+    } else if (filePath.endsWith(".m4s") || filePath.endsWith(".mp4")) {
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    }
+  }
+}));
 app.use(express.static(path.join(ROOT, "public")));
 
 async function readLibrary() {
@@ -433,6 +481,8 @@ async function analyzePlayback(entry) {
     sourcePath,
     sourceExt: path.extname(sourcePath).toLowerCase(),
     videoCodec: videoStream?.codec_name || "",
+    width: Number(videoStream?.width || 0),
+    height: Number(videoStream?.height || 0),
     durationSeconds: Number(probe.format?.duration || 0),
     audioTracks,
     subtitleTracks,
@@ -459,6 +509,258 @@ function getPreparedVariantPath(entryId, track) {
     filePath,
     publicSrc: `/streams/${entryId}/audio-${trackKey}.mp4`
   };
+}
+
+const HLS_RENDITIONS = [
+  { name: "1080p", height: 1080, maxRate: "4600k", bufferSize: "6500k", bandwidth: 4800000, level: "4.0", codec: "avc1.640028" },
+  { name: "720p", height: 720, maxRate: "2500k", bufferSize: "3500k", bandwidth: 2700000, level: "3.1", codec: "avc1.64001f" },
+  { name: "480p", height: 480, maxRate: "1250k", bufferSize: "1800k", bandwidth: 1400000, level: "3.0", codec: "avc1.64001e" }
+];
+
+function getHlsPaths(entryId, temporary = false) {
+  const suffix = temporary ? ".hls-tmp" : "hls";
+  const folder = path.join(STREAMS_DIR, entryId, suffix);
+  return {
+    folder,
+    masterPath: path.join(folder, "master.m3u8"),
+    publicSrc: `/streams/${entryId}/hls/master.m3u8`
+  };
+}
+
+function getHlsRenditions(analysis) {
+  const sourceHeight = analysis.height || 480;
+  const eligible = HLS_RENDITIONS.filter((rendition) => rendition.height <= sourceHeight);
+  if (eligible.length) {
+    return eligible.sort((a, b) => a.height - b.height);
+  }
+
+  const height = Math.max(2, sourceHeight - (sourceHeight % 2));
+  return [{
+    name: `${height}p`,
+    height,
+    maxRate: "963k",
+    bufferSize: "1350k",
+    bandwidth: 1150000,
+    level: "3.0",
+    codec: "avc1.64001e"
+  }];
+}
+
+function getHlsResolution(analysis, targetHeight) {
+  const sourceWidth = analysis.width || Math.round((targetHeight * 16) / 9);
+  const sourceHeight = analysis.height || targetHeight;
+  const scaledWidth = Math.round((sourceWidth * targetHeight) / sourceHeight / 2) * 2;
+  return { width: Math.max(2, scaledWidth), height: targetHeight };
+}
+
+function hlsLanguageCode(language) {
+  const value = String(language || "").toLowerCase();
+  if (value.includes("portugu")) return "pt-BR";
+  if (value.includes("ingl")) return "en";
+  if (value === "jpn" || value.includes("japon")) return "ja";
+  return value || "und";
+}
+
+function escapeHlsAttribute(value) {
+  return String(value || "").replace(/["\r\n]/g, "");
+}
+
+function summarizeProcessError(error) {
+  const lines = String(error?.message || error || "Erro desconhecido")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.slice(-5).join(" | ");
+}
+
+function buildHlsMasterPlaylist(analysis, renditions) {
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
+  analysis.audioTracks.forEach((track, index) => {
+    const name = escapeHlsAttribute(track.displayLanguage || track.language || `Audio ${index + 1}`);
+    const language = escapeHlsAttribute(hlsLanguageCode(track.language));
+    const defaultFlags = index === 0 ? "YES" : "NO";
+    lines.push(
+      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="${name}",LANGUAGE="${language}",DEFAULT=${defaultFlags},AUTOSELECT=YES,URI="audio/${getAudioTrackKey(track)}/index.m3u8"`
+    );
+  });
+
+  // Menor qualidade primeiro: o player inicia rapido e sobe conforme a banda medida.
+  for (const rendition of [...renditions].sort((a, b) => a.height - b.height)) {
+    const resolution = getHlsResolution(analysis, rendition.height);
+    const audioGroup = analysis.audioTracks.length ? ',AUDIO="audio"' : "";
+    lines.push(
+      `#EXT-X-STREAM-INF:BANDWIDTH=${rendition.bandwidth},AVERAGE-BANDWIDTH=${Math.round(rendition.bandwidth * 0.88)},RESOLUTION=${resolution.width}x${resolution.height},CODECS="${rendition.codec},mp4a.40.2"${audioGroup}`
+    );
+    lines.push(`${rendition.name}/index.m3u8`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function ensureHlsDiskSpace(sourcePath, analysis, renditions) {
+  if (typeof fsp.statfs !== "function") {
+    return;
+  }
+  const [disk, source] = await Promise.all([fsp.statfs(STREAMS_DIR), fsp.stat(sourcePath)]);
+  const freeBytes = Number(disk.bavail) * Number(disk.bsize);
+  const totalBitsPerSecond = renditions.reduce((sum, rendition) => sum + rendition.bandwidth, 0)
+    + analysis.audioTracks.length * 160000;
+  const bitrateEstimate = analysis.durationSeconds > 0
+    ? (totalBitsPerSecond * analysis.durationSeconds) / 8
+    : source.size * 1.5;
+  const requiredBytes = Math.max(2 * 1024 ** 3, Math.round(bitrateEstimate * 1.25));
+  if (freeBytes < requiredBytes) {
+    throw new Error(`Espaco insuficiente para HLS. Livre: ${Math.round(freeBytes / 1024 ** 3)} GB; minimo estimado: ${Math.round(requiredBytes / 1024 ** 3)} GB.`);
+  }
+}
+
+function readHlsQualities(masterPath) {
+  try {
+    const playlist = fs.readFileSync(masterPath, "utf8");
+    return [...playlist.matchAll(/RESOLUTION=\d+x(\d+)/g)]
+      .map((match) => Number(match[1]))
+      .filter((height, index, values) => Number.isFinite(height) && values.indexOf(height) === index)
+      .sort((a, b) => b - a);
+  } catch {
+    return [];
+  }
+}
+
+function getHlsSnapshot(entryId) {
+  const hls = getHlsPaths(entryId);
+  if (fs.existsSync(hls.masterPath)) {
+    const status = hlsStatus.get(entryId);
+    return {
+      status: "ready",
+      percent: 100,
+      message: "Streaming adaptativo pronto.",
+      source: hls.publicSrc,
+      qualities: status?.qualities?.length ? status.qualities : readHlsQualities(hls.masterPath)
+    };
+  }
+  return hlsStatus.get(entryId) || {
+    status: "idle",
+    percent: 0,
+    message: "Aguardando processamento HLS.",
+    source: null,
+    qualities: []
+  };
+}
+
+async function prepareHls(entry, analysis) {
+  const finalHls = getHlsPaths(entry.entryId);
+  if (fs.existsSync(finalHls.masterPath)) {
+    return finalHls;
+  }
+  if (hlsJobs.has(entry.entryId)) {
+    return hlsJobs.get(entry.entryId);
+  }
+
+  const renditions = getHlsRenditions(analysis);
+  hlsStatus.set(entry.entryId, {
+    status: "processing",
+    percent: 0,
+    message: "Iniciando processamento HLS...",
+    source: null,
+    qualities: renditions.map((item) => item.height)
+  });
+
+  const job = (async () => {
+    const startedAt = Date.now();
+    const tempHls = getHlsPaths(entry.entryId, true);
+    const totalSteps = Math.max(1, analysis.audioTracks.length + renditions.length);
+    let completedSteps = 0;
+    await ensureHlsDiskSpace(analysis.sourcePath, analysis, renditions);
+    await removeDirectoryIfExists(tempHls.folder);
+    fs.mkdirSync(tempHls.folder, { recursive: true });
+    console.log(`[HLS] inicio id=${entry.entryId} origem=${analysis.width}x${analysis.height} rendicoes=${renditions.map((item) => item.name).join(",")}`);
+
+    const updateProgress = (message, progress, extra = {}) => {
+      const currentStep = Math.max(0, Math.min(99, progress));
+      hlsStatus.set(entry.entryId, {
+        status: "processing",
+        percent: Math.min(99, Math.round(((completedSteps + currentStep / 100) / totalSteps) * 100)),
+        message,
+        source: null,
+        qualities: renditions.map((item) => item.height),
+        ...extra
+      });
+    };
+
+    for (const track of analysis.audioTracks) {
+      const audioFolder = path.join(tempHls.folder, "audio", getAudioTrackKey(track));
+      fs.mkdirSync(audioFolder, { recursive: true });
+      updateProgress(`Preparando audio ${track.displayLanguage || track.language}...`, 0);
+      await runFfmpeg([
+        "-y", "-i", analysis.sourcePath,
+        "-map", `0:${track.ffmpegStreamIndex}`,
+        "-vn", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        "-hls_time", "4", "-hls_playlist_type", "vod",
+        "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_filename", path.join(audioFolder, "segment_%05d.m4s"),
+        path.join(audioFolder, "index.m3u8")
+      ], (progress) => {
+        const outSeconds = parseTimestampToSeconds(progress.out_time);
+        const percent = analysis.durationSeconds > 0 ? (outSeconds / analysis.durationSeconds) * 100 : 0;
+        updateProgress(`Preparando audio ${track.displayLanguage || track.language}...`, percent);
+      }, { cwd: audioFolder });
+      completedSteps += 1;
+    }
+
+    for (const rendition of renditions) {
+      const videoFolder = path.join(tempHls.folder, rendition.name);
+      fs.mkdirSync(videoFolder, { recursive: true });
+      updateProgress(`Gerando qualidade ${rendition.name}...`, 0);
+      await runFfmpeg([
+        "-y", "-i", analysis.sourcePath,
+        "-map", "0:v:0", "-an",
+        "-vf", `scale=-2:${rendition.height}`,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-maxrate", rendition.maxRate, "-bufsize", rendition.bufferSize,
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", rendition.level,
+        "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*4)",
+        "-hls_time", "4", "-hls_playlist_type", "vod",
+        "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_filename", path.join(videoFolder, "segment_%05d.m4s"),
+        path.join(videoFolder, "index.m3u8")
+      ], (progress) => {
+        const outSeconds = parseTimestampToSeconds(progress.out_time);
+        const percent = analysis.durationSeconds > 0 ? (outSeconds / analysis.durationSeconds) * 100 : 0;
+        updateProgress(`Gerando qualidade ${rendition.name}...`, percent);
+      }, { cwd: videoFolder });
+      completedSteps += 1;
+    }
+
+    await fsp.writeFile(tempHls.masterPath, buildHlsMasterPlaylist(analysis, renditions));
+    await removeDirectoryIfExists(finalHls.folder);
+    await fsp.rename(tempHls.folder, finalHls.folder);
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+    hlsStatus.set(entry.entryId, {
+      status: "ready",
+      percent: 100,
+      message: "Streaming adaptativo pronto.",
+      source: finalHls.publicSrc,
+      qualities: renditions.map((item) => item.height)
+    });
+    console.log(`[HLS] concluido id=${entry.entryId} tempo=${elapsedSeconds}s rendicoes=${renditions.map((item) => item.name).join(",")}`);
+    return finalHls;
+  })().catch(async (error) => {
+    hlsStatus.set(entry.entryId, {
+      status: "error",
+      percent: 0,
+      message: "Falha no processamento HLS. Consulte os logs do servidor.",
+      source: null,
+      qualities: []
+    });
+    console.error(`[HLS] erro id=${entry.entryId}: ${summarizeProcessError(error)}`);
+    await removeDirectoryIfExists(getHlsPaths(entry.entryId, true).folder);
+    throw error;
+  }).finally(() => {
+    hlsJobs.delete(entry.entryId);
+  });
+
+  hlsJobs.set(entry.entryId, job);
+  return job;
 }
 
 function getPreparedSubtitlePath(entryId, subtitleIndex) {
@@ -557,9 +859,12 @@ function getSubtitleSnapshot(entryId, subtitleTracks) {
   });
 }
 
-function runFfmpeg(args, onProgress) {
+function runFfmpeg(args, onProgress, spawnOptions = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, [...args, "-progress", "pipe:1", "-nostats"], { windowsHide: true });
+    const proc = spawn(ffmpegPath, [...args, "-progress", "pipe:1", "-nostats"], {
+      windowsHide: true,
+      ...spawnOptions
+    });
     let stderr = "";
     let stdoutBuffer = "";
 
@@ -739,22 +1044,46 @@ async function queuePreparationForEntry(entryId) {
   }
 
   const analysis = await analyzePlayback(entry);
-  if (!analysis.requiresPreparedStream) {
-    return;
-  }
-
-  for (const track of getPreferredAudioOrder(analysis.audioTracks)) {
+  const preferredTrack = getPreferredAudioOrder(analysis.audioTracks)[0];
+  if (analysis.requiresPreparedStream && preferredTrack) {
     try {
-      await prepareVariant(entry, analysis, track.index);
+      await prepareVariant(entry, analysis, preferredTrack.index);
     } catch {
-      prepareStatus.set(`${entry.entryId}:audio:${getAudioTrackKey(track)}`, {
+      prepareStatus.set(`${entry.entryId}:audio:${getAudioTrackKey(preferredTrack)}`, {
         status: "error",
         percent: 0,
         message: "Falha na preparação.",
-        audioIndex: track.index
+        audioIndex: preferredTrack.index
       });
     }
   }
+
+  await prepareHls(entry, analysis);
+}
+
+function enqueuePreparationForEntry(entryId) {
+  if (queuedPreparationJobs.has(entryId)) {
+    return queuedPreparationJobs.get(entryId);
+  }
+
+  if (getHlsSnapshot(entryId).status === "idle") {
+    hlsStatus.set(entryId, {
+      status: "processing",
+      percent: 0,
+      message: "Video na fila de otimizacao...",
+      source: null,
+      qualities: []
+    });
+  }
+
+  const queuedJob = mediaProcessingQueue
+    .then(() => queuePreparationForEntry(entryId))
+    .finally(() => queuedPreparationJobs.delete(entryId));
+  queuedPreparationJobs.set(entryId, queuedJob);
+  mediaProcessingQueue = queuedJob.catch((error) => {
+    console.error(`[MIDIA] falha no processamento id=${entryId}: ${summarizeProcessError(error)}`);
+  });
+  return queuedJob;
 }
 
 app.get("/api/library", async (req, res) => {
@@ -768,6 +1097,15 @@ app.get("/api/uploads/status/:uploadId", (req, res) => {
   }
 
   return res.json(status);
+});
+
+app.get("/api/hls/status/:entryId", async (req, res) => {
+  const library = await readLibrary();
+  const entry = findEntryById(library, req.params.entryId);
+  if (!entry) {
+    return res.status(404).json({ error: "Mídia não encontrada." });
+  }
+  return res.json(getHlsSnapshot(entry.entryId));
 });
 
 app.get("/api/playback/:entryId", async (req, res) => {
@@ -787,20 +1125,50 @@ app.get("/api/playback/:entryId", async (req, res) => {
       }
     }
     const subtitleTracks = getSubtitleSnapshot(entry.entryId, analysis.subtitleTracks);
+    const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
+    const fallbackVariant = selectedTrack ? getPreparedVariantPath(entry.entryId, selectedTrack) : null;
+    const fallbackSource = !analysis.requiresPreparedStream
+      ? entry.sourceSrc
+      : fallbackVariant && fs.existsSync(fallbackVariant.filePath)
+        ? fallbackVariant.publicSrc
+        : null;
+    let hls = getHlsSnapshot(entry.entryId);
+    if (hls.status === "idle") {
+      enqueuePreparationForEntry(entry.entryId).catch(() => {});
+      hls = getHlsSnapshot(entry.entryId);
+    }
+
+    if (hls.status === "ready") {
+      return res.json({
+        status: "ready",
+        playbackType: "hls",
+        source: hls.source,
+        fallbackSource,
+        audioTracks: analysis.audioTracks,
+        subtitleTracks,
+        selectedAudio: 0,
+        qualities: hls.qualities,
+        hls,
+        direct: false,
+        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
+      });
+    }
 
     if (!analysis.requiresPreparedStream) {
       return res.json({
         status: "ready",
+        playbackType: "direct",
         source: entry.sourceSrc,
         audioTracks: analysis.audioTracks,
         subtitleTracks,
         selectedAudio: audioIndex,
+        qualities: [],
+        hls,
         direct: true,
         preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
       });
     }
 
-    const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
     if (!selectedTrack) {
       return res.status(422).json({
         error: "Nenhuma faixa em Português, Inglês ou no áudio original foi encontrada."
@@ -811,10 +1179,13 @@ app.get("/api/playback/:entryId", async (req, res) => {
     if (fs.existsSync(variant.filePath)) {
       return res.json({
         status: "ready",
+        playbackType: "direct",
         source: variant.publicSrc,
         audioTracks: analysis.audioTracks,
         subtitleTracks,
         selectedAudio: audioIndex,
+        qualities: [],
+        hls,
         direct: false,
         preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
       });
@@ -823,10 +1194,13 @@ app.get("/api/playback/:entryId", async (req, res) => {
     prepareVariant(entry, analysis, audioIndex).catch(() => {});
     return res.status(202).json({
       status: "preparing",
+      playbackType: "direct",
       message: "Preparando versão compatível para reprodução.",
       audioTracks: analysis.audioTracks,
       subtitleTracks,
       selectedAudio: audioIndex,
+      qualities: [],
+      hls,
       direct: false,
       preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
     });
@@ -854,7 +1228,7 @@ app.post(
       library.items.unshift(item);
     });
 
-    queuePreparationForEntry(item.id).catch(() => {});
+    enqueuePreparationForEntry(item.id).catch(() => {});
     res.status(201).json({ item });
   }
 );
@@ -883,7 +1257,7 @@ app.post(
     });
 
     for (const episode of item.episodes) {
-      queuePreparationForEntry(episode.id).catch(() => {});
+      enqueuePreparationForEntry(episode.id).catch(() => {});
     }
 
     res.status(201).json({ item });
@@ -962,4 +1336,7 @@ app.get("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
+  if (!accessProtectionEnabled) {
+    console.warn("[SEGURANCA] APP_USERNAME/APP_PASSWORD nao definidos; catalogo e videos estao sem autenticacao no Express.");
+  }
 });
