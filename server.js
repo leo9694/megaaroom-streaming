@@ -16,6 +16,7 @@ const DATA_DIR = path.join(ROOT, "data");
 const UPLOADS_DIR = path.join(ROOT, "uploads");
 const STREAMS_DIR = path.join(ROOT, "streams");
 const LIBRARY_FILE = path.join(DATA_DIR, "library.json");
+const progressStore = require('./progress-store')(path.join(DATA_DIR, 'progress.json'));
 const APP_USERNAME = process.env.APP_USERNAME || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const accessProtectionEnabled = Boolean(APP_USERNAME && APP_PASSWORD);
@@ -1108,6 +1109,23 @@ app.get("/api/uploads/status/:uploadId", (req, res) => {
   }
 
   return res.json(status);
+});
+
+app.get('/api/progress', async (req, res) => {
+  try { res.json(await progressStore.all()); }
+  catch { res.status(500).json({ error: 'Falha ao carregar progresso.' }); }
+});
+
+app.post('/api/progress/:entryId', async (req, res) => {
+  try {
+    if (!findEntryById(await readLibrary(), req.params.entryId)) {
+      return res.status(404).json({ error: 'Midia nao encontrada.' });
+    }
+    res.json(await progressStore.save(req.params.entryId, req.body || {}));
+  } catch (error) {
+    res.status(error.message === 'INVALID_PROGRESS' ? 400 : 500)
+      .json({ error: 'Nao foi possivel salvar o progresso.' });
+  }
 });
 
 app.get("/api/hls/status/:entryId", async (req, res) => {

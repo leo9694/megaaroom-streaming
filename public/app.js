@@ -1,4 +1,10 @@
 const state = {
+  progress: {},
+  progressEntryId: null,
+  progressReady: false,
+  lastProgressSave: 0,
+  progressSaving: false,
+  autoplayEntryId: null,
   library: [],
   filter: "all",
   uploads: [],
@@ -94,6 +100,81 @@ const detailPanelTitle = document.getElementById("detailPanelTitle");
 const episodePanel = document.getElementById("episodePanel");
 const relatedList = document.getElementById("relatedList");
 const backButton = document.getElementById("backButton");
+const episodeActions = document.getElementById('episodeActions');
+const nextEpisodeButton = document.getElementById('nextEpisodeButton');
+const watchedButton = document.getElementById('watchedButton');
+const resumeMessage = document.getElementById('resumeMessage');
+
+function updateEpisodeMarks() {
+  episodePanel.querySelectorAll('[data-episode-id]').forEach((button) => {
+    const saved = state.progress[button.dataset.episodeId];
+    button.classList.toggle('is-watched', Boolean(saved?.watched));
+    button.querySelector('.episode-progress').textContent = saved?.watched
+      ? 'Assistido' : saved?.position > 0 ? `Continuar em ${formatTime(saved.position)}` : '';
+  });
+}
+
+async function saveProgress(watched = false, force = false) {
+  if (!state.progressReady || !state.progressEntryId) return;
+  if (!force && (state.progressSaving || Date.now() - state.lastProgressSave < 10000)) return;
+  const id = state.progressEntryId;
+  const payload = {
+    position: Number.isFinite(detailPlayer.currentTime) ? detailPlayer.currentTime : 0,
+    duration: Number.isFinite(detailPlayer.duration) ? detailPlayer.duration : 0,
+    watched
+  };
+  state.lastProgressSave = Date.now();
+  state.progressSaving = true;
+  try {
+    const response = await fetch(`/api/progress/${encodeURIComponent(id)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), keepalive: true
+    });
+    if (!response.ok) throw new Error('Falha ao salvar progresso.');
+    state.progress[id] = await response.json();
+    updateEpisodeMarks();
+  } catch (error) {
+    resumeMessage.textContent = 'Progresso nao sincronizado. Tentaremos novamente.';
+    if (watched) throw error;
+  } finally { state.progressSaving = false; }
+}
+
+async function completeEpisode() {
+  const item = state.library.find((entry) => entry.id === state.currentMediaId);
+  if (item?.type !== 'series' || !state.progressReady) return;
+  nextEpisodeButton.disabled = watchedButton.disabled = true;
+  try {
+    await saveProgress(true, true);
+    const index = item.episodes.findIndex((episode) => episode.id === state.currentEpisodeId);
+    const next = item.episodes[index + 1];
+    if (next) {
+      state.autoplayEntryId = next.id;
+      state.currentEpisodeId = next.id;
+      renderDetail(item);
+    } else {
+      detailPlayer.pause();
+      resumeMessage.textContent = 'Episodio marcado como assistido. Este e o ultimo da temporada.';
+    }
+  } catch { resumeMessage.textContent = 'Nao foi possivel marcar como assistido. Tente novamente.'; }
+  finally { updateEpisodeActions(item); }
+}
+
+function updateEpisodeActions(item) {
+  const isSeries = item?.type === 'series';
+  episodeActions.classList.toggle('hidden', !isSeries);
+  const index = isSeries ? item.episodes.findIndex((episode) => episode.id === state.currentEpisodeId) : -1;
+  nextEpisodeButton.disabled = !state.progressReady || !item?.episodes?.[index + 1];
+  watchedButton.disabled = !state.progressReady;
+}
+
+nextEpisodeButton.addEventListener('click', completeEpisode);
+watchedButton.addEventListener('click', completeEpisode);
+detailPlayer.addEventListener('timeupdate', () => { if (!detailPlayer.paused) saveProgress(); });
+detailPlayer.addEventListener('pause', () => saveProgress(false, true));
+detailPlayer.addEventListener('seeked', () => saveProgress(false, true));
+detailPlayer.addEventListener('ended', () => saveProgress(true, true).catch(() => {}));
+window.addEventListener('pagehide', () => saveProgress(false, true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(false, true); });
 
 const PLAYER_ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
@@ -474,6 +555,10 @@ async function loadLibrary(silent = false, options = {}) {
     const response = await fetch("/api/library", { cache: "no-store" });
     const data = await response.json();
     state.library = data.items || [];
+    if (shouldSyncRoute) {
+      const progressResponse = await fetch('/api/progress', { cache: 'no-store' });
+      if (progressResponse.ok) state.progress = await progressResponse.json();
+    }
     updateStats();
     if (shouldSyncRoute) {
       syncRoute();
@@ -546,7 +631,12 @@ function openMedia(id, fromRoute = false, preserveScroll = false) {
   document.body.classList.add("is-detail-view");
   state.currentView = "detail";
   state.currentMediaId = id;
-  state.currentEpisodeId = item.type === "series" ? item.episodes[0]?.id || null : null;
+  const inProgress = (item.episodes || []).filter((episode) =>
+    state.progress[episode.id]?.position > 0 && !state.progress[episode.id]?.watched
+  ).sort((a, b) => state.progress[b.id].updatedAt - state.progress[a.id].updatedAt);
+  state.currentEpisodeId = item.type === 'series'
+    ? (inProgress[0] || item.episodes.find((episode) => !state.progress[episode.id]?.watched) || item.episodes[0])?.id || null
+    : null;
   state.currentAudioIndex = 0;
   if (!preserveScroll) {
     state.currentSubtitleIndex = -1;
@@ -663,6 +753,8 @@ function buildPosterCardMarkup(item) {
 
 function renderDetail(item) {
   releasePlayerPlayback();
+  resumeMessage.textContent = '';
+  updateEpisodeActions(item);
   state.qualityMode = "auto";
   state.currentHlsHeight = 0;
   state.hlsQualities = [];
@@ -705,6 +797,7 @@ function renderDetail(item) {
           <button class="episode-item ${episode.id === state.currentEpisodeId ? "is-active" : ""}" data-episode-id="${episode.id}" type="button">
             Episodio ${episode.episodeNumber}
             <small>${escapeHtml(episode.title)}</small>
+            <small class="episode-progress"></small>
           </button>
         `
       )
@@ -723,12 +816,31 @@ function renderDetail(item) {
   }
 
   renderRelated(item);
+  updateEpisodeMarks();
 }
 
 async function loadPlaybackSource(entryId) {
   const token = ++state.playbackPollToken;
 
   try {
+    if (state.progressEntryId !== entryId) {
+      const progressResponse = await fetch('/api/progress', { cache: 'no-store' });
+      if (!progressResponse.ok) throw new Error('Falha ao carregar progresso');
+      const progress = await progressResponse.json();
+      if (token !== state.playbackPollToken) return;
+      state.progress = progress;
+      state.progressEntryId = entryId;
+      state.progressReady = false;
+      const saved = progress[entryId];
+      state.pendingPlaybackResume = {
+        entryId, currentTime: saved?.watched ? 0 : saved?.position || 0,
+        wasPlaying: state.autoplayEntryId === entryId, muted: detailPlayer.muted, volume: detailPlayer.volume
+      };
+      state.autoplayEntryId = null;
+      resumeMessage.textContent = saved?.watched ? 'Ja assistido' : saved?.position > 0
+        ? `Continuando de ${formatTime(saved.position)}` : '';
+      updateEpisodeMarks();
+    }
     const response = await fetch(`/api/playback/${entryId}?audio=${state.currentAudioIndex}`, { cache: "no-store" });
     const payload = await response.json();
 
@@ -803,6 +915,7 @@ function attachDirectPlayback(entryId, source) {
   qualityToggle.disabled = true;
   qualityMenu.innerHTML = '<button class="quality-option is-active" type="button" disabled>Qualidade original</button>';
   detailPlayer.src = source;
+  restorePlaybackPosition(entryId);
 }
 
 function attachHlsPlayback(entryId, payload) {
@@ -934,6 +1047,9 @@ function resetPlayerSource() {
 }
 
 function releasePlayerPlayback() {
+  saveProgress(false, true);
+  state.progressReady = false;
+  state.progressEntryId = null;
   state.playbackPollToken += 1;
   if (state.controlsHideTimer) {
     window.clearTimeout(state.controlsHideTimer);
@@ -977,6 +1093,9 @@ function restorePlaybackPosition(entryId) {
       : pending.currentTime;
     detailPlayer.volume = pending.volume;
     detailPlayer.muted = pending.muted;
+    state.progressReady = true;
+    state.lastProgressSave = Date.now();
+    updateEpisodeActions(state.library.find((item) => item.id === state.currentMediaId));
     if (pending.wasPlaying) {
       detailPlayer.play().catch(() => {});
     }

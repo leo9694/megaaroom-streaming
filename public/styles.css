@@ -1161,6 +1161,14 @@ video {
   overflow: hidden;
 }
 
+.episode-progress { color: #a5e6b3 !important; }
+.episode-item.is-watched { border-left: 3px solid #79c68f; }
+.resume-message { order: 5; color: #b6c2cb; font-size: 0.85rem; }
+.resume-message:empty { display: none; }
+.episode-actions { order: 5; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.episode-actions button { flex: 1; min-height: 44px; }
+.episode-actions button:disabled { opacity: 0.5; cursor: default; }
+
 .related-thumb {
   width: 100%;
   min-height: 160px;

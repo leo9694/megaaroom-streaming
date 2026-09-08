@@ -6,3 +6,5 @@ node_modules/
 streams/
 uploads/
 data/library.json
+data/progress.json
+data/progress.json.tmp
