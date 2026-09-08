@@ -1168,6 +1168,7 @@ video {
 .episode-actions { order: 5; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .episode-actions button { flex: 1; min-height: 44px; }
 .episode-actions button:disabled { opacity: 0.5; cursor: default; }
+.media-information { margin-top: 24px; }
 
 .related-thumb {
   width: 100%;
@@ -1653,13 +1654,10 @@ video {
   }
 
   .back-btn { order: 0; }
-  #detailBadge { order: 1; }
-  #detailTitle { order: 2; }
-  .detail-meta-line { order: 3; }
-  .detail-player-wrap { order: 4; }
-  .detail-overview { order: 5; }
-  .playback-toolbar { order: 6; }
-  .detail-actions-row { order: 7; }
+  .detail-player-wrap { order: 1; }
+  .resume-message { order: 2; }
+  .episode-actions { order: 3; }
+  .media-information { order: 4; }
 
   .detail-player-wrap {
     width: calc(100% + 32px);

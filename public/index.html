@@ -195,17 +195,6 @@
             <div class="detail-content">
               <div class="detail-main">
                 <button id="backButton" class="back-btn" type="button">← Voltar ao catalogo</button>
-                <p id="detailBadge" class="section-kicker">Filme</p>
-                <h1 id="detailTitle">Titulo</h1>
-                <p id="detailMeta" class="detail-meta-line"></p>
-                <div class="playback-toolbar">
-                  <div id="playbackStatus" class="playback-status hidden"></div>
-                  <div id="audioSelector" class="audio-selector"></div>
-                </div>
-                <div class="detail-actions-row">
-                  <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
-                  <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
-                </div>
                 <div id="customPlayer" class="detail-player-wrap custom-player">
                   <div class="player-stage">
                     <video id="detailPlayer" class="detail-player" preload="metadata"></video>
@@ -239,7 +228,20 @@
                   <button id="nextEpisodeButton" class="hero-primary" type="button">Proximo episodio</button>
                   <button id="watchedButton" class="mini-btn" type="button">Assistido</button>
                 </div>
-                <p id="detailSynopsis" class="detail-overview"></p>
+                <section class="media-information">
+                  <p id="detailBadge" class="section-kicker">Filme</p>
+                  <h1 id="detailTitle">Titulo</h1>
+                  <p id="detailMeta" class="detail-meta-line"></p>
+                  <div class="playback-toolbar">
+                    <div id="playbackStatus" class="playback-status hidden"></div>
+                    <div id="audioSelector" class="audio-selector"></div>
+                  </div>
+                  <div class="detail-actions-row">
+                    <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
+                    <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
+                  </div>
+                  <p id="detailSynopsis" class="detail-overview"></p>
+                </section>
               </div>
               <aside class="detail-sidebar">
                 <section class="detail-panel">
