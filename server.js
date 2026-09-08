@@ -512,6 +512,9 @@ function getPreparedVariantPath(entryId, track) {
   };
 }
 
+const { createSerialQueue, limitFfmpegArgs, lowerPriority } = require("./media-processing");
+const scheduleFfmpeg = createSerialQueue();
+
 const HLS_RENDITIONS = [
   { name: "1080p", width: 1920, height: 1080, maxRate: "4600k", bufferSize: "6500k", bandwidth: 4800000, level: "4.0", codec: "avc1.640028" },
   { name: "720p", width: 1280, height: 720, maxRate: "2500k", bufferSize: "3500k", bandwidth: 2700000, level: "3.1", codec: "avc1.64001f" },
@@ -726,8 +729,8 @@ async function prepareHls(entry, analysis) {
       await runFfmpeg([
         "-y", "-i", analysis.sourcePath,
         "-map", "0:v:0", "-an",
-        "-vf", `scale=${resolution.width}:${resolution.height}`,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-vf", `fps=fps='min(source_fps,30)',scale=${resolution.width}:${resolution.height}`,
+        "-c:v", "libx264", "-preset", "superfast", "-crf", "23",
         "-maxrate", rendition.maxRate, "-bufsize", rendition.bufferSize,
         "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", rendition.level,
         "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*4)",
@@ -872,11 +875,12 @@ function getSubtitleSnapshot(entryId, subtitleTracks) {
 }
 
 function runFfmpeg(args, onProgress, spawnOptions = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, [...args, "-progress", "pipe:1", "-nostats"], {
+  return scheduleFfmpeg(() => new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, [...limitFfmpegArgs(args), "-progress", "pipe:1", "-nostats"], {
       windowsHide: true,
       ...spawnOptions
     });
+    proc.once("spawn", () => lowerPriority(proc));
     let stderr = "";
     let stdoutBuffer = "";
 
@@ -900,7 +904,7 @@ function runFfmpeg(args, onProgress, spawnOptions = {}) {
     });
 
     proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderr = (stderr + chunk.toString()).slice(-65536);
     });
 
     proc.on("error", reject);
@@ -911,7 +915,7 @@ function runFfmpeg(args, onProgress, spawnOptions = {}) {
       }
       reject(new Error(stderr || `ffmpeg exited with code ${code}`));
     });
-  });
+  }));
 }
 
 async function prepareVariant(entry, analysis, audioIndex) {
@@ -993,7 +997,7 @@ async function prepareVariant(entry, analysis, audioIndex) {
           "-c:v",
           "libx264",
           "-preset",
-          "veryfast",
+          "superfast",
           "-crf",
           "23",
           "-c:a",
@@ -1056,6 +1060,11 @@ async function queuePreparationForEntry(entryId) {
   }
 
   const analysis = await analyzePlayback(entry);
+  // Completed HLS does not need another fallback MP4 conversion.
+  const existingQualities = readHlsQualities(getHlsPaths(entry.entryId).masterPath);
+  if (getHlsRenditions(analysis).every((rendition) => existingQualities.includes(rendition.height))) {
+    return;
+  }
   const preferredTrack = getPreferredAudioOrder(analysis.audioTracks)[0];
   if (analysis.requiresPreparedStream && preferredTrack) {
     try {
