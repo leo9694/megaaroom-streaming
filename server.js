@@ -710,6 +710,10 @@ async function prepareHls(entry, analysis) {
     };
 
     for (const track of analysis.audioTracks) {
+      if (fs.existsSync(path.join(finalHls.folder, "audio", getAudioTrackKey(track), "index.m3u8"))) {
+        completedSteps += 1;
+        continue;
+      }
       const audioFolder = path.join(tempHls.folder, "audio", getAudioTrackKey(track));
       fs.mkdirSync(audioFolder, { recursive: true });
       updateProgress(`Preparando audio ${track.displayLanguage || track.language}...`, 0);
@@ -730,6 +734,10 @@ async function prepareHls(entry, analysis) {
     }
 
     for (const rendition of renditions) {
+      if (existingQualities.includes(rendition.height) && fs.existsSync(path.join(finalHls.folder, rendition.name, "index.m3u8"))) {
+        completedSteps += 1;
+        continue;
+      }
       const videoFolder = path.join(tempHls.folder, rendition.name);
       const resolution = getHlsResolution(analysis, rendition);
       fs.mkdirSync(videoFolder, { recursive: true });
@@ -755,8 +763,21 @@ async function prepareHls(entry, analysis) {
     }
 
     await fsp.writeFile(tempHls.masterPath, buildHlsMasterPlaylist(analysis, renditions));
-    await removeDirectoryIfExists(finalHls.folder);
-    await fsp.rename(tempHls.folder, finalHls.folder);
+    // Publish new tracks without deleting segments used by active players.
+    fs.mkdirSync(finalHls.folder, { recursive: true });
+    for (const dir of await fsp.readdir(tempHls.folder, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      if (dir.name === "audio") {
+        fs.mkdirSync(path.join(finalHls.folder, "audio"), { recursive: true });
+        for (const track of await fsp.readdir(path.join(tempHls.folder, "audio"))) {
+          await fsp.rename(path.join(tempHls.folder, "audio", track), path.join(finalHls.folder, "audio", track));
+        }
+      } else {
+        await fsp.rename(path.join(tempHls.folder, dir.name), path.join(finalHls.folder, dir.name));
+      }
+    }
+    await fsp.rename(tempHls.masterPath, finalHls.masterPath);
+    await removeDirectoryIfExists(tempHls.folder);
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     hlsStatus.set(entry.entryId, {
       status: "ready",
@@ -1119,6 +1140,47 @@ function enqueuePreparationForEntry(entryId) {
   });
   return queuedJob;
 }
+
+const optimizationRequests = new Set();
+
+app.post("/api/media/:entryId/optimize", async (req, res) => {
+  const { entryId } = req.params;
+  if (optimizationRequests.has(entryId) || queuedPreparationJobs.has(entryId) || hlsJobs.has(entryId)) {
+    return res.status(409).json({ error: "Esta midia ja esta na fila de processamento." });
+  }
+  let processing;
+  try { processing = parseProcessing({ enabled: true, qualities: req.body?.qualities }); }
+  catch { return res.status(400).json({ error: "Selecione 480p, 720p e/ou 1080p." }); }
+  optimizationRequests.add(entryId);
+  try {
+    const entry = findEntryById(await readLibrary(), entryId);
+    if (!entry) return res.status(404).json({ error: "Midia nao encontrada." });
+    const analysis = await analyzePlayback(entry);
+    const selected = getHlsRenditions(analysis, processing);
+    if (!selected.length) {
+      return res.status(422).json({ error: "As qualidades selecionadas superam a resolucao original. Selecione uma menor." });
+    }
+    const existing = readHlsQualities(getHlsPaths(entryId).masterPath);
+    processing.qualities = [...new Set([...processing.qualities, ...existing.filter((height) => [480, 720, 1080].includes(height))])];
+    const updated = await updateLibrary((library) => {
+      const current = findEntryById(library, entryId);
+      if (!current) return false;
+      (current.episode || current.parent).processing = processing;
+      return true;
+    });
+    if (!updated) return res.status(404).json({ error: "Midia nao encontrada." });
+    if (selected.every((rendition) => existing.includes(rendition.height))) {
+      return res.json({ message: "As qualidades selecionadas ja estao prontas.", processing });
+    }
+    enqueuePreparationForEntry(entryId).catch(() => {});
+    return res.status(202).json({ message: "Otimizacao adicionada a fila. Voce pode continuar assistindo; as qualidades ficarao disponiveis ao reabrir o video quando estiverem prontas.", processing });
+  } catch (error) {
+    console.error("[HLS] solicitar otimizacao:", summarizeProcessError(error));
+    return res.status(500).json({ error: "Nao foi possivel iniciar a otimizacao." });
+  } finally {
+    optimizationRequests.delete(entryId);
+  }
+});
 
 app.get("/api/library", async (req, res) => {
   res.json(await readLibrary());

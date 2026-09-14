@@ -22,7 +22,7 @@ test("saved settings control renditions and disabled mode only copies video", as
     // Exercise server functions with isolated data and no listening HTTP server.
     vm.runInContext(source.slice(0, source.lastIndexOf("app.listen(PORT")), context);
     const api = vm.runInContext(`({ buildMovieItem, buildSeriesItem, findEntryById,
-      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths })`, context);
+      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary })`, context);
     const disabled = { enabled: false, qualities: [] };
     const file = { path: path.join(folder, "uploads", "fixture.mkv"), originalname: "fixture.mkv" };
     const body = { title: "Test", processing: disabled };
@@ -60,6 +60,34 @@ test("saved settings control renditions and disabled mode only copies video", as
     entry.parent.processing = { enabled: true, qualities: [720] };
     await api.prepareHls(entry, analysis);
     assert.deepEqual(Array.from(api.readHlsQualities(api.getHlsPaths(entry.entryId).masterPath)), [720]);
+    const beforeUpgrade = calls.length;
+    entry.parent.processing.qualities.push(480);
+    await api.prepareHls(entry, analysis);
+    assert.equal(calls.length, beforeUpgrade + 1, "Only missing video quality should be encoded");
+    assert.deepEqual(Array.from(api.readHlsQualities(api.getHlsPaths(entry.entryId).masterPath)), [720, 480]);
+
+    await api.updateLibrary((stored) => { stored.items = library.items; });
+    context.testAnalysis = analysis;
+    vm.runInContext("analyzePlayback = async () => testAnalysis; enqueuePreparationForEntry = async () => {}", context);
+    const listener = api.app.listen(0, "127.0.0.1");
+    await new Promise((resolve) => listener.once("listening", resolve));
+    const send = (id, qualities) => fetch(`http://127.0.0.1:${listener.address().port}/api/media/${id}/optimize`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
+    });
+    try {
+      assert.equal((await send("missing", [480])).status, 404);
+      assert.equal((await send(movie.id, [])).status, 400);
+      assert.equal((await send(episode.entryId, [480])).status, 202);
+      const persisted = JSON.parse(await fs.readFile(path.join(folder, "data", "library.json"), "utf8"));
+      assert.equal(persisted.items[1].processing.enabled, false, "Season default stays unchanged");
+      assert.deepEqual(persisted.items[1].episodes[0].processing, { enabled: true, qualities: [480] });
+      vm.runInContext(`queuedPreparationJobs.set("${episode.entryId}", Promise.resolve())`, context);
+      assert.equal((await send(episode.entryId, [720])).status, 409);
+      assert.equal((await send(movie.id, [720])).status, 200);
+    } finally {
+      listener.closeAllConnections();
+      await new Promise((resolve) => listener.close(resolve));
+    }
   } finally {
     await fs.rm(folder, { recursive: true, force: true });
   }

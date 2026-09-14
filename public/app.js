@@ -611,6 +611,17 @@ function refreshVisibleLibraryParts() {
     return;
   }
 
+  const optimizeEntry = item.type === "series"
+    ? item.episodes.find((episode) => episode.id === state.currentEpisodeId) : item;
+  optimizeForm.dataset.entryId = optimizeEntry?.id || "";
+  optimizeForm.querySelector('[type="submit"]').disabled = !optimizeEntry || pendingOptimizations.has(optimizeEntry.id);
+  document.getElementById("optimizeTarget").textContent = item.type === "series"
+    ? `Otimizar episodio ${optimizeEntry?.episodeNumber || ""}` : "Otimizar este filme";
+  optimizeMessage.textContent = "";
+  const processing = optimizeEntry?.processing || item.processing;
+  for (const choice of optimizeForm.querySelectorAll('[name="quality"]')) {
+    choice.checked = !processing?.enabled || processing.qualities.includes(Number(choice.value));
+  }
   renderRelated(item);
 }
 
@@ -773,6 +784,40 @@ function buildPosterCardMarkup(item) {
     </div>
   `;
 }
+
+const optimizeForm = document.getElementById("optimizeForm");
+const optimizeMessage = document.getElementById("optimizeMessage");
+const pendingOptimizations = new Set();
+optimizeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const item = state.library.find((media) => media.id === state.currentMediaId);
+  const entryId = item?.type === "series" ? state.currentEpisodeId : item?.id;
+  if (!entryId || pendingOptimizations.has(entryId)) return;
+  const qualities = [...optimizeForm.querySelectorAll('[name="quality"]:checked')].map((input) => Number(input.value));
+  if (!qualities.length) {
+    optimizeMessage.textContent = "Selecione ao menos uma qualidade.";
+    return;
+  }
+  const button = optimizeForm.querySelector('[type="submit"]');
+  pendingOptimizations.add(entryId);
+  button.disabled = true;
+  optimizeMessage.textContent = "Solicitando otimizacao...";
+  try {
+    const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/optimize`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Falha ao solicitar otimizacao.");
+    const target = item.type === "series" ? item.episodes.find((episode) => episode.id === entryId) : item;
+    target.processing = payload.processing;
+    if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = payload.message;
+  } catch (error) {
+    if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = error.message;
+  } finally {
+    pendingOptimizations.delete(entryId);
+    if (optimizeForm.dataset.entryId === entryId) button.disabled = false;
+  }
+});
 
 function renderDetail(item) {
   releasePlayerPlayback();

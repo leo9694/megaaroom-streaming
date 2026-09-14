@@ -13,7 +13,7 @@ function parseProcessing(value) {
 }
 
 function entryProcessing(entry) {
-  return parseProcessing(entry.parent.processing);
+  return parseProcessing(entry.episode?.processing ?? entry.parent.processing);
 }
 
 module.exports = { parseProcessing, entryProcessing };

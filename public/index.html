@@ -268,6 +268,20 @@
                     <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
                     <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
                   </div>
+                  <details class="processing-options">
+                    <summary class="mini-btn">Otimizar video</summary>
+                    <form id="optimizeForm" class="upload-form">
+                      <p id="optimizeTarget">Otimizar este filme</p>
+                      <fieldset class="processing-qualities">
+                        <legend>Qualidades desejadas</legend>
+                        <label><input type="checkbox" name="quality" value="480" checked /> 480p</label>
+                        <label><input type="checkbox" name="quality" value="720" checked /> 720p</label>
+                        <label><input type="checkbox" name="quality" value="1080" checked /> 1080p</label>
+                      </fieldset>
+                      <button type="submit" class="mini-btn">Iniciar otimizacao</button>
+                      <p id="optimizeMessage" role="status" aria-live="polite"></p>
+                    </form>
+                  </details>
                   <p id="detailSynopsis" class="detail-overview"></p>
                 </section>
               </div>
