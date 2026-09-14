@@ -22,7 +22,7 @@ test("saved settings control renditions and disabled mode only copies video", as
     // Exercise server functions with isolated data and no listening HTTP server.
     vm.runInContext(source.slice(0, source.lastIndexOf("app.listen(PORT")), context);
     const api = vm.runInContext(`({ buildMovieItem, buildSeriesItem, findEntryById,
-      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary })`, context);
+      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary, getPreparationSnapshot })`, context);
     const disabled = { enabled: false, qualities: [] };
     const file = { path: path.join(folder, "uploads", "fixture.mkv"), originalname: "fixture.mkv" };
     const body = { title: "Test", processing: disabled };
@@ -45,6 +45,8 @@ test("saved settings control renditions and disabled mode only copies video", as
     vm.runInContext("runFfmpeg = capture", context);
     await api.prepareVariant(entry, analysis, 0);
     assert.equal(calls.length, 1);
+    assert.equal(api.getPreparationSnapshot(entry.entryId, analysis.audioTracks)[0].status, "ready");
+    assert.equal(api.getPreparationSnapshot(entry.entryId, analysis.audioTracks, true)[0].status, "idle");
     assert.equal(calls[0][calls[0].indexOf("-c:v") + 1], "copy");
     assert.equal(calls[0][calls[0].indexOf("-c:a") + 1], "aac");
     assert.equal(await api.prepareHls(entry, analysis), null);

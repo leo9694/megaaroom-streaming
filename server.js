@@ -1061,10 +1061,10 @@ async function prepareVariant(entry, analysis, audioIndex, original = false) {
   return job;
 }
 
-function getPreparationSnapshot(entryId, audioTracks) {
+function getPreparationSnapshot(entryId, audioTracks, original = false) {
   return audioTracks.map((track) => {
-    const jobKey = `${entryId}:audio:${getAudioTrackKey(track)}`;
-    const variant = getPreparedVariantPath(entryId, track);
+    const jobKey = `${entryId}:audio:${getAudioTrackKey(track)}${original ? ":original" : ""}`;
+    const variant = getPreparedVariantPath(entryId, track, original);
     if (fs.existsSync(variant.filePath)) {
       return {
         audioIndex: track.index,
@@ -1271,7 +1271,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
         qualities: hls.qualities,
         hls,
         direct: false,
-        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
+        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks, original)
       });
     }
 
@@ -1286,7 +1286,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
         qualities: [],
         hls,
         direct: true,
-        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
+        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks, original)
       });
     }
 
@@ -1308,7 +1308,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
         qualities: [],
         hls,
         direct: false,
-        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
+        preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks, original)
       });
     }
 
@@ -1329,7 +1329,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
       qualities: [],
       hls,
       direct: false,
-      preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks)
+      preparation: getPreparationSnapshot(entry.entryId, analysis.audioTracks, original)
     });
   } catch (error) {
     return res.status(500).json({ error: "Falha ao preparar reprodução.", details: error.message });

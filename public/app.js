@@ -948,7 +948,7 @@ async function loadPlaybackSource(entryId) {
 
     const prep = (payload.preparation || []).find((entry) => entry.audioIndex === state.currentAudioIndex);
     const statusText = prep
-      ? `${prep.message}${typeof prep.percent === "number" ? ` (${prep.percent}%)` : ""}`
+      ? `${state.qualityMode === "original" ? "Preparando original: " : ""}${prep.message}${typeof prep.percent === "number" ? ` (${prep.percent}%)` : ""}`
       : payload.message || "Preparando versão compatível para reprodução...";
     showPlaybackStatus(statusText);
     window.setTimeout(() => {
@@ -1196,18 +1196,23 @@ function renderQualitySelector(qualities) {
   qualityLabel.textContent = state.qualityMode === "auto"
     ? `Auto${state.currentHlsHeight ? ` ${state.currentHlsHeight}p` : ""}`
     : state.qualityMode === "original" ? "Original" : `${state.qualityMode}p`;
-  qualityMenu.innerHTML = [
+  const markup = [
     `<button class="quality-option ${state.qualityMode === "original" ? "is-active" : ""}" data-quality="original" type="button"><span>Original</span><small>Sem reduzir o video</small></button>`,
     `<button class="quality-option ${state.qualityMode === "auto" ? "is-active" : ""}" data-quality="auto" type="button"><span>Auto</span><small>${state.currentHlsHeight ? `${state.currentHlsHeight}p agora` : "Recomendado"}</small></button>`,
     ...unique.map((quality) => `<button class="quality-option ${Number(state.qualityMode) === quality.height ? "is-active" : ""}" data-quality="${quality.height}" data-level-index="${quality.levelIndex ?? ""}" type="button">${quality.height}p</button>`)
   ].join("");
 
+  // Do not replace focused buttons on repeated HLS level events.
+  if (qualityMenu.innerHTML === markup) return;
+  qualityMenu.innerHTML = markup;
   qualityMenu.querySelectorAll("[data-quality]").forEach((button) => {
     button.addEventListener("click", () => {
       const requested = button.dataset.quality;
       const switchingSource = requested === "original" || state.playbackType !== "hls";
       state.qualityMode = ["auto", "original"].includes(requested) ? requested : Number(requested);
       if (switchingSource) {
+        renderQualitySelector(unique);
+        showPlaybackStatus(requested === "original" ? "Carregando original. O audio pode precisar de preparacao..." : "Carregando qualidade otimizada...");
         rememberPlaybackPosition(state.hlsEntryId);
         qualityMenu.classList.add("hidden");
         loadPlaybackSource(state.hlsEntryId);
