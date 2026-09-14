@@ -504,14 +504,15 @@ function getAudioTrackKey(track) {
   return `stream-${track.ffmpegStreamIndex}`;
 }
 
-function getPreparedVariantPath(entryId, track) {
+function getPreparedVariantPath(entryId, track, original = false) {
   const trackKey = getAudioTrackKey(track);
   const folder = path.join(STREAMS_DIR, entryId);
-  const filePath = path.join(folder, `audio-${trackKey}.mp4`);
+  const fileName = `${original ? "original-" : ""}audio-${trackKey}.mp4`;
+  const filePath = path.join(folder, fileName);
   return {
     folder,
     filePath,
-    publicSrc: `/streams/${entryId}/audio-${trackKey}.mp4`
+    publicSrc: `/streams/${entryId}/${fileName}`
   };
 }
 
@@ -947,18 +948,18 @@ function runFfmpeg(args, onProgress, spawnOptions = {}) {
   }));
 }
 
-async function prepareVariant(entry, analysis, audioIndex) {
+async function prepareVariant(entry, analysis, audioIndex, original = false) {
   const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
   if (!selectedTrack) {
     throw new Error("Nenhuma faixa de áudio compatível foi encontrada.");
   }
 
-  const variant = getPreparedVariantPath(entry.entryId, selectedTrack);
+  const variant = getPreparedVariantPath(entry.entryId, selectedTrack, original);
   if (fs.existsSync(variant.filePath)) {
     return variant;
   }
 
-  const jobKey = `${entry.entryId}:audio:${getAudioTrackKey(selectedTrack)}`;
+  const jobKey = `${entry.entryId}:audio:${getAudioTrackKey(selectedTrack)}${original ? ":original" : ""}`;
   if (prepareJobs.has(jobKey)) {
     return prepareJobs.get(jobKey);
   }
@@ -1014,7 +1015,7 @@ async function prepareVariant(entry, analysis, audioIndex) {
         handleProgress
       );
     } catch {
-      if (!entryProcessing(entry).enabled) {
+      if (original || !entryProcessing(entry).enabled) {
         throw new Error("Nao foi possivel manter o video original. Envie com processamento ativado.");
       }
       await runFfmpeg(
@@ -1233,6 +1234,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
     }
 
     const analysis = await analyzePlayback(entry);
+    const original = req.query.original === "1";
     const requestedAudio = Number(req.query.audio || 0);
     const audioIndex = Math.max(0, Math.min(requestedAudio, Math.max(analysis.audioTracks.length - 1, 0)));
     for (const subtitle of analysis.subtitleTracks) {
@@ -1257,7 +1259,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
       hls = getHlsSnapshot(entry.entryId);
     }
 
-    if (hls.status === "ready") {
+    if (hls.status === "ready" && !original) {
       return res.json({
         status: "ready",
         playbackType: "hls",
@@ -1294,7 +1296,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
       });
     }
 
-    const variant = getPreparedVariantPath(entry.entryId, selectedTrack);
+    const variant = getPreparedVariantPath(entry.entryId, selectedTrack, original);
     if (fs.existsSync(variant.filePath)) {
       return res.json({
         status: "ready",
@@ -1310,7 +1312,13 @@ app.get("/api/playback/:entryId", async (req, res) => {
       });
     }
 
-    prepareVariant(entry, analysis, audioIndex).catch(() => {});
+    const originalKey = `${entry.entryId}:audio:${getAudioTrackKey(selectedTrack)}:original`;
+    if (original && prepareStatus.get(originalKey)?.status === "error") {
+      return res.status(422).json({ error: "Este original nao pode ser preparado para o navegador. Selecione Auto ou uma qualidade otimizada." });
+    }
+    prepareVariant(entry, analysis, audioIndex, original).catch(() => {
+      if (original) prepareStatus.set(originalKey, { status: "error" });
+    });
     return res.status(202).json({
       status: "preparing",
       playbackType: "direct",

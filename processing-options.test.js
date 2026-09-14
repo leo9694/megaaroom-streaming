@@ -84,6 +84,21 @@ test("saved settings control renditions and disabled mode only copies video", as
       vm.runInContext(`queuedPreparationJobs.set("${episode.entryId}", Promise.resolve())`, context);
       assert.equal((await send(episode.entryId, [720])).status, 409);
       assert.equal((await send(movie.id, [720])).status, 200);
+      analysis.requiresPreparedStream = true;
+      const playbackUrl = `http://127.0.0.1:${listener.address().port}/api/playback/${movie.id}`;
+      analysis.subtitleTracks = [];
+      const optimized = await (await fetch(playbackUrl)).json();
+      assert.equal(optimized.playbackType, "hls");
+      const originalRequest = await fetch(playbackUrl + "?original=1");
+      assert.equal(originalRequest.status, 202);
+      // Await the scheduled audio preparation before checking the direct source.
+      await vm.runInContext("Promise.all([...prepareJobs.values()])", context);
+      const original = await (await fetch(playbackUrl + "?original=1")).json();
+      assert.equal(original.playbackType, "direct");
+      assert.match(original.source, /original-audio-/);
+      const originalCall = calls.find((args) => args.at(-1).includes("original-audio-"));
+      assert.equal(originalCall[originalCall.indexOf("-c:v") + 1], "copy");
+      assert.equal((await (await fetch(playbackUrl)).json()).playbackType, "hls");
     } finally {
       listener.closeAllConnections();
       await new Promise((resolve) => listener.close(resolve));

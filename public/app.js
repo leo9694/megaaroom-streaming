@@ -909,20 +909,24 @@ async function loadPlaybackSource(entryId) {
         ? `Continuando de ${formatTime(saved.position)}` : '';
       updateEpisodeMarks();
     }
-    const response = await fetch(`/api/playback/${entryId}?audio=${state.currentAudioIndex}`, { cache: "no-store" });
+    const response = await fetch(`/api/playback/${entryId}?audio=${state.currentAudioIndex}&original=${state.qualityMode === "original" ? 1 : 0}`, { cache: "no-store" });
     const payload = await response.json();
 
     if (token !== state.playbackPollToken) {
       return;
     }
 
+    if (!response.ok && response.status !== 202) {
+      showPlaybackStatus(payload.error || "Falha ao preparar reproducao.");
+      return;
+    }
     renderAudioSelector(entryId, payload.audioTracks || []);
     renderSubtitleSelector(entryId, payload.subtitleTracks || []);
 
     if (payload.status === "ready") {
       attachPlaybackSource(entryId, payload);
       applySubtitleTracks(payload.subtitleTracks || []);
-      if (payload.playbackType === "direct" && payload.hls?.status === "processing") {
+      if (state.qualityMode !== "original" && payload.playbackType === "direct" && payload.hls?.status === "processing") {
         qualityLabel.textContent = `Otimizando ${payload.hls.percent || 0}%`;
         qualityToggle.title = "As qualidades estao sendo preparadas";
         showPlaybackStatus(`Reproducao disponivel. ${payload.hls.message} (${payload.hls.percent || 0}%)`);
@@ -966,6 +970,9 @@ function attachPlaybackSource(entryId, payload) {
     return;
   }
   attachDirectPlayback(entryId, payload.source);
+  if (payload.hls?.status === "ready") {
+    renderQualitySelector(payload.hls.qualities.map((height) => ({ height, levelIndex: null })));
+  }
 }
 
 function attachDirectPlayback(entryId, source) {
@@ -997,7 +1004,7 @@ function attachHlsPlayback(entryId, payload) {
   state.playbackType = "hls";
   state.hlsEntryId = entryId;
   state.activePlaybackSource = absoluteSrc;
-  state.qualityMode = "auto";
+  if (state.qualityMode === "original") state.qualityMode = "auto";
   state.currentHlsHeight = 0;
   state.hlsRecoveryCount = 0;
   renderQualitySelector((payload.qualities || []).map((height) => ({ height, levelIndex: null })));
@@ -1007,7 +1014,7 @@ function attachHlsPlayback(entryId, payload) {
   if (isSafari && nativeHlsSupported) {
     detailPlayer.src = payload.source;
     qualityLabel.textContent = "Auto";
-    qualityToggle.disabled = true;
+    renderQualitySelector([]);
     restorePlaybackPosition(entryId);
     return;
   }
@@ -1032,6 +1039,9 @@ function attachHlsPlayback(entryId, payload) {
     hls.loadSource(payload.source);
     hls.attachMedia(detailPlayer);
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      if (state.qualityMode !== "auto") {
+        hls.currentLevel = hls.levels.findIndex((level) => getQualityLabelHeight(level) === Number(state.qualityMode));
+      }
       renderQualitySelector(hls.levels.map((level, levelIndex) => ({ height: getQualityLabelHeight(level), levelIndex })));
       if (hls.audioTracks.length) {
         hls.audioTrack = Math.min(state.currentAudioIndex, hls.audioTracks.length - 1);
@@ -1055,7 +1065,7 @@ function attachHlsPlayback(entryId, payload) {
   if (nativeHlsSupported) {
     detailPlayer.src = payload.source;
     qualityLabel.textContent = "Auto";
-    qualityToggle.disabled = true;
+    renderQualitySelector([]);
     restorePlaybackPosition(entryId);
     return;
   }
@@ -1182,11 +1192,12 @@ function renderQualitySelector(qualities) {
     .filter((quality, index, values) => quality.height && values.findIndex((item) => item.height === quality.height) === index)
     .sort((a, b) => b.height - a.height);
   state.hlsQualities = unique;
-  qualityToggle.disabled = unique.length === 0 || unique.every((quality) => quality.levelIndex === null);
+  qualityToggle.disabled = false;
   qualityLabel.textContent = state.qualityMode === "auto"
     ? `Auto${state.currentHlsHeight ? ` ${state.currentHlsHeight}p` : ""}`
-    : `${state.qualityMode}p`;
+    : state.qualityMode === "original" ? "Original" : `${state.qualityMode}p`;
   qualityMenu.innerHTML = [
+    `<button class="quality-option ${state.qualityMode === "original" ? "is-active" : ""}" data-quality="original" type="button"><span>Original</span><small>Sem reduzir o video</small></button>`,
     `<button class="quality-option ${state.qualityMode === "auto" ? "is-active" : ""}" data-quality="auto" type="button"><span>Auto</span><small>${state.currentHlsHeight ? `${state.currentHlsHeight}p agora` : "Recomendado"}</small></button>`,
     ...unique.map((quality) => `<button class="quality-option ${Number(state.qualityMode) === quality.height ? "is-active" : ""}" data-quality="${quality.height}" data-level-index="${quality.levelIndex ?? ""}" type="button">${quality.height}p</button>`)
   ].join("");
@@ -1194,7 +1205,14 @@ function renderQualitySelector(qualities) {
   qualityMenu.querySelectorAll("[data-quality]").forEach((button) => {
     button.addEventListener("click", () => {
       const requested = button.dataset.quality;
-      state.qualityMode = requested === "auto" ? "auto" : Number(requested);
+      const switchingSource = requested === "original" || state.playbackType !== "hls";
+      state.qualityMode = ["auto", "original"].includes(requested) ? requested : Number(requested);
+      if (switchingSource) {
+        rememberPlaybackPosition(state.hlsEntryId);
+        qualityMenu.classList.add("hidden");
+        loadPlaybackSource(state.hlsEntryId);
+        return;
+      }
       if (state.hls) {
         state.hls.currentLevel = requested === "auto" ? -1 : Number(button.dataset.levelIndex);
       }
