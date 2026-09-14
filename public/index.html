@@ -74,6 +74,20 @@
                     <span>Sinopse</span>
                     <textarea name="synopsis" rows="3" placeholder="Resumo rapido do filme"></textarea>
                   </label>
+                  <fieldset class="processing-options">
+                    <legend>Processamento do video</legend>
+                    <label class="processing-check">
+                      <input type="checkbox" name="processVideo" />
+                      <span>Otimizar para reproducao</span>
+                    </label>
+                    <fieldset class="processing-qualities" disabled>
+                      <legend>Qualidades desejadas</legend>
+                      <label><input type="checkbox" name="quality" value="480" checked /> 480p</label>
+                      <label><input type="checkbox" name="quality" value="720" checked /> 720p</label>
+                      <label><input type="checkbox" name="quality" value="1080" checked /> 1080p</label>
+                    </fieldset>
+                    <p>Desmarcado: mantem o video original e prepara audio e legendas. A reproducao depende da compatibilidade do aparelho. Ativado: gera apenas as qualidades selecionadas, sem ampliar o original.</p>
+                  </fieldset>
                   <button type="submit" class="submit-btn">Enviar filme(s)</button>
                 </form>
 
@@ -108,6 +122,20 @@
                     <span>Sinopse</span>
                     <textarea name="synopsis" rows="3" placeholder="Resumo da temporada"></textarea>
                   </label>
+                  <fieldset class="processing-options">
+                    <legend>Processamento do video</legend>
+                    <label class="processing-check">
+                      <input type="checkbox" name="processVideo" />
+                      <span>Otimizar para reproducao</span>
+                    </label>
+                    <fieldset class="processing-qualities" disabled>
+                      <legend>Qualidades desejadas</legend>
+                      <label><input type="checkbox" name="quality" value="480" checked /> 480p</label>
+                      <label><input type="checkbox" name="quality" value="720" checked /> 720p</label>
+                      <label><input type="checkbox" name="quality" value="1080" checked /> 1080p</label>
+                    </fieldset>
+                    <p>Desmarcado: mantem o video original e prepara audio e legendas. A reproducao depende da compatibilidade do aparelho. Ativado: gera apenas as qualidades selecionadas, sem ampliar o original.</p>
+                  </fieldset>
                   <button type="submit" class="submit-btn">Enviar temporada</button>
                 </form>
 

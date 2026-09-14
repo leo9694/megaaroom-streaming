@@ -1,4 +1,5 @@
 const express = require("express");
+const { parseProcessing, entryProcessing } = require("./processing-options");
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -290,6 +291,7 @@ function buildMovieItem(file, body, coverFile) {
   return {
     id: createId("movie"),
     type: "movie",
+    processing: body.processing,
     title: providedTitle || titleFromFilename(file.originalname, "Filme sem titulo"),
     genre: (body.genre || "Nao informado").trim(),
     year: (body.year || "").trim(),
@@ -310,6 +312,7 @@ function buildSeriesItem(files, body, coverFile) {
   return {
     id: createId("series"),
     type: "series",
+    processing: body.processing,
     title: body.title.trim(),
     genre: (body.genre || "Nao informado").trim(),
     year: (body.year || "").trim(),
@@ -531,16 +534,20 @@ function getHlsPaths(entryId, temporary = false) {
   };
 }
 
-function getHlsRenditions(analysis) {
+function getHlsRenditions(analysis, processing = parseProcessing()) {
+  if (!processing.enabled) return [];
   const sourceWidth = analysis.width || 854;
   const sourceHeight = analysis.height || 480;
   const eligible = HLS_RENDITIONS.filter(
-    (rendition) => rendition.width <= sourceWidth || rendition.height <= sourceHeight
+    (rendition) => processing.qualities.includes(rendition.height) &&
+      (rendition.width <= sourceWidth || rendition.height <= sourceHeight)
   );
   if (eligible.length) {
     return eligible.sort((a, b) => a.height - b.height);
   }
 
+  // Do not generate an unselected quality or upscale small sources.
+  if (sourceHeight >= 480 || !processing.qualities.includes(480)) return [];
   const height = Math.max(2, sourceHeight - (sourceHeight % 2));
   return [{
     name: `${height}p`,
@@ -661,7 +668,8 @@ function getHlsSnapshot(entryId) {
 
 async function prepareHls(entry, analysis) {
   const finalHls = getHlsPaths(entry.entryId);
-  const renditions = getHlsRenditions(analysis);
+  const renditions = getHlsRenditions(analysis, entryProcessing(entry));
+  if (!renditions.length) return null;
   const existingQualities = readHlsQualities(finalHls.masterPath);
   const hasEveryRendition = renditions.every((rendition) => existingQualities.includes(rendition.height));
   if (fs.existsSync(finalHls.masterPath) && hasEveryRendition) {
@@ -985,6 +993,9 @@ async function prepareVariant(entry, analysis, audioIndex) {
         handleProgress
       );
     } catch {
+      if (!entryProcessing(entry).enabled) {
+        throw new Error("Nao foi possivel manter o video original. Envie com processamento ativado.");
+      }
       await runFfmpeg(
         [
           "-y",
@@ -1062,7 +1073,8 @@ async function queuePreparationForEntry(entryId) {
   const analysis = await analyzePlayback(entry);
   // Completed HLS does not need another fallback MP4 conversion.
   const existingQualities = readHlsQualities(getHlsPaths(entry.entryId).masterPath);
-  if (getHlsRenditions(analysis).every((rendition) => existingQualities.includes(rendition.height))) {
+  const renditions = getHlsRenditions(analysis, entryProcessing(entry));
+  if (renditions.length && renditions.every((rendition) => existingQualities.includes(rendition.height))) {
     return;
   }
   const preferredTrack = getPreferredAudioOrder(analysis.audioTracks)[0];
@@ -1079,7 +1091,8 @@ async function queuePreparationForEntry(entryId) {
     }
   }
 
-  await prepareHls(entry, analysis);
+  if (renditions.length) await prepareHls(entry, analysis);
+  else hlsStatus.set(entryId, { status: "disabled", percent: 0, qualities: [], source: null });
 }
 
 function enqueuePreparationForEntry(entryId) {
@@ -1143,6 +1156,9 @@ app.get("/api/hls/status/:entryId", async (req, res) => {
   if (!entry) {
     return res.status(404).json({ error: "Mídia não encontrada." });
   }
+  if (!entryProcessing(entry).enabled) {
+    return res.json({ status: "disabled", percent: 0, qualities: [], source: null });
+  }
   return res.json(getHlsSnapshot(entry.entryId));
 });
 
@@ -1171,9 +1187,10 @@ app.get("/api/playback/:entryId", async (req, res) => {
         ? fallbackVariant.publicSrc
         : null;
     let hls = getHlsSnapshot(entry.entryId);
-    const expectedQualities = getHlsRenditions(analysis).map((rendition) => rendition.height);
+    const expectedQualities = getHlsRenditions(analysis, entryProcessing(entry)).map((rendition) => rendition.height);
+    if (!expectedQualities.length) hls = { status: "disabled", percent: 0, qualities: [], source: null };
     const needsQualityUpgrade = expectedQualities.some((height) => !hls.qualities.includes(height));
-    if (hls.status === "idle" || needsQualityUpgrade) {
+    if (expectedQualities.length && (hls.status === "idle" || needsQualityUpgrade)) {
       enqueuePreparationForEntry(entry.entryId).catch(() => {});
       hls = getHlsSnapshot(entry.entryId);
     }
@@ -1263,6 +1280,8 @@ app.post(
 
     markUploadProgress(req.uploadId, { status: "processing" });
 
+    try { req.body.processing = parseProcessing(req.body.processing); }
+    catch { return res.status(400).json({ error: "Selecione ao menos uma qualidade valida para processar." }); }
     const item = buildMovieItem(file, req.body, coverFile);
     await updateLibrary((library) => {
       library.items.unshift(item);
@@ -1291,7 +1310,9 @@ app.post(
 
     markUploadProgress(req.uploadId, { status: "processing" });
 
-    const item = buildSeriesItem(files, { title, genre, year, synopsis, seasonNumber }, coverFile);
+    try { req.body.processing = parseProcessing(req.body.processing); }
+    catch { return res.status(400).json({ error: "Selecione ao menos uma qualidade valida para processar." }); }
+    const item = buildSeriesItem(files, req.body, coverFile);
     await updateLibrary((library) => {
       library.items.unshift(item);
     });

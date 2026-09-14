@@ -1,5 +1,14 @@
 # Video processing
 
+New movie and season uploads offer an opt-in processing checkbox and separate
+480p, 720p and 1080p choices. These settings persist in the catalogue, including
+after a server restart. Legacy items without settings keep all qualities.
+With processing off, audio preparation copies the original video stream and
+encodes audio as before; subtitles remain available through the existing
+extraction path. No fallback video encoding is allowed in that mode. Playback
+therefore requires device support for the original video codec. A selected
+quality above the source dimensions is skipped rather than upscaled.
+
 Optimization keeps the 480p, 720p and 1080p renditions when the source
 dimensions allow them, without upscaling. Existing completed HLS is reused.
 Outputs remain H.264 8-bit with AAC stereo, with the existing bitrate limits.

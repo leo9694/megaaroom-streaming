@@ -467,6 +467,27 @@ window.addEventListener("popstate", () => {
   syncRoute();
 });
 
+function syncProcessingOptions(form) {
+  const enabled = form.elements.processVideo.checked;
+  const choices = [...form.querySelectorAll('[name="quality"]')];
+  form.querySelector(".processing-qualities").disabled = !enabled;
+  choices[0].setCustomValidity(enabled && !choices.some((choice) => choice.checked)
+    ? "Selecione ao menos uma qualidade." : "");
+}
+
+function appendProcessingOptions(formData, form) {
+  formData.append("processing", JSON.stringify({
+    enabled: form.elements.processVideo.checked,
+    qualities: [...form.querySelectorAll('[name="quality"]:checked')].map((choice) => Number(choice.value))
+  }));
+}
+
+for (const form of [movieForm, seriesForm]) {
+  form.addEventListener("change", () => syncProcessingOptions(form));
+  form.addEventListener("reset", () => queueMicrotask(() => syncProcessingOptions(form)));
+  syncProcessingOptions(form);
+}
+
 movieForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -487,6 +508,7 @@ movieForm.addEventListener("submit", (event) => {
 
   files.forEach((file) => {
     const formData = new FormData();
+    appendProcessingOptions(formData, form);
     formData.append("video", file);
     if (coverFile) {
       formData.append("cover", coverFile);
@@ -526,6 +548,7 @@ seriesForm.addEventListener("submit", (event) => {
   }
 
   const formData = new FormData();
+  appendProcessingOptions(formData, form);
   formData.append("title", title);
   if (coverFile) {
     formData.append("cover", coverFile);
