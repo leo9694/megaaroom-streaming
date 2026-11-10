@@ -18,6 +18,22 @@
 .local-helper-panel input { width: 100%; min-height: 44px; padding: 10px; color: var(--text); background: var(--panel-soft); border: 1px solid var(--panel-border); border-radius: 4px; }
 .local-job-list { display: grid; gap: 10px; max-height: 380px; overflow: auto; }
 .local-job-list p { overflow-wrap: anywhere; }
+.local-copy-list { display: grid; gap: 10px; margin-bottom: 10px; }
+.local-progress-card { min-width: 0; }
+.local-progress-card > strong { display: block; overflow-wrap: anywhere; }
+.local-progress-heading { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 13px; }
+.local-progress-heading b { color: var(--yellow); font-variant-numeric: tabular-nums; }
+.local-progress-card .local-transfer-numbers { font-variant-numeric: tabular-nums; }
+.local-progress-card[data-active="true"] .progress-fill:not(.is-indeterminate) {
+  background-image: repeating-linear-gradient(110deg, transparent 0 10px, rgba(255,255,255,.18) 10px 20px), linear-gradient(90deg, #f5c93b, #de232d);
+  background-size: 40px 100%, 100% 100%;
+  animation: local-transfer-stripes 1.4s linear infinite;
+}
+.local-progress-card[data-failed="true"] .progress-fill { background: var(--accent); }
+@keyframes local-transfer-stripes { to { background-position: 40px 0, 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .local-progress-card .progress-fill { animation: none !important; transition: none; }
+}
 
 *,
 *::before,

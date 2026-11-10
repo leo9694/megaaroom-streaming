@@ -110,7 +110,11 @@ async function createHelper({ origin, root, key, engine }) {
   app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 1 }));
   const snapshot = (job) => ({ id: job.id, title: job.title, status: job.status, message: job.message,
     percent: job.percent || 0, loaded: job.loaded || 0, total: job.total || 0,
-    processing: job.status === "processing" && job.current ? engine.getHlsSnapshot(job.current) : null });
+    speedBytesPerSecond: job.speedBytesPerSecond || 0, lastTransferAt: job.lastTransferAt || null,
+    processing: job.status === "processing" && job.current
+      ? job.phase === "audio" ? engine.getPreparationSnapshot(job.current, job.currentTracks || [], true).find((track) => track.audioIndex === job.audioIndex)
+        : job.phase === "video" ? engine.getHlsSnapshot(job.current) : null
+      : null });
   app.get("/jobs", (req, res) => res.json([...jobs.values()].map(snapshot)));
   const start = (job) => queue(async () => {
     try {
@@ -119,21 +123,34 @@ async function createHelper({ origin, root, key, engine }) {
       for (const entry of job.entries) {
         job.current = entry.entryId;
         const analysis = await engine.analyzePlayback(entry);
+        job.currentTracks = analysis.audioTracks;
         for (const track of analysis.audioTracks) {
+          job.phase = "audio"; job.audioIndex = track.index; job.message = `Preparando audio ${track.displayLanguage || track.language} no PC.`;
           await engine.prepareVariant(entry, analysis, track.index, true);
         }
+        job.phase = "subtitles"; job.message = "Preparando legendas no PC.";
         for (const track of analysis.subtitleTracks.filter((track) => track.kind === "subtitles")) {
           await engine.prepareSubtitle(entry, analysis, track.index);
         }
+        job.phase = "video"; job.message = "Otimizando video no PC.";
         await engine.prepareHls(entry, analysis);
         if (engine.getHlsSnapshot(entry.entryId).status !== "ready") throw new Error("Escolha uma qualidade igual ou inferior ao video original.");
         const { sourcePath, ...metadata } = analysis;
         job.analyses.push(metadata);
       }
-      job.status = "uploading"; job.message = "Enviando original e versoes prontas para a VPS."; persist(job);
+      job.status = "uploading"; job.message = "Enviando original e versoes prontas para a VPS.";
+      job.loaded = 0; job.total = 0; job.percent = 0; job.speedBytesPerSecond = 0; job.lastTransferAt = Date.now(); persist(job);
       let last = 0;
+      let sampleAt = Date.now();
+      let sampleLoaded = 0;
       await sendPrepared(origin, job, root, (loaded, total) => {
         job.loaded = loaded; job.total = total; job.percent = Math.floor(loaded / total * 100);
+        const now = Date.now();
+        job.lastTransferAt = now;
+        if (now - sampleAt >= 500) {
+          job.speedBytesPerSecond = Math.max(0, (loaded - sampleLoaded) / ((now - sampleAt) / 1000));
+          sampleAt = now; sampleLoaded = loaded;
+        }
         if (Date.now() - last > 2000) { persist(job); last = Date.now(); }
       });
       job.status = "done"; job.percent = 100; job.message = "Disponivel na biblioteca."; persist(job);

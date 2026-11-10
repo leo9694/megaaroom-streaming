@@ -12,11 +12,77 @@
     <p><a href="/install-local.ps1" download>Baixar instalador para Windows</a> · <a href="/local-help.html" target="_blank" rel="noopener">Como instalar</a></p>
     <label>Codigo exibido pelo auxiliar<input type="password" class="local-pairing-key" autocomplete="off" /></label>
     <button type="button" class="mini-btn local-connect">Conectar auxiliar</button>
-    <p class="local-helper-message" role="status"></p><div class="local-job-list" aria-live="polite"></div>`;
+    <p class="local-helper-message" role="status"></p><div class="local-copy-list"></div><div class="local-job-list"></div>`;
   document.querySelector(".upload-card").append(panel);
   const message = panel.querySelector(".local-helper-message");
   const jobsList = panel.querySelector(".local-job-list");
   const input = panel.querySelector("input");
+  const copyList = panel.querySelector(".local-copy-list");
+  const jobCards = new Map();
+  const transferSamples = new Map();
+  const bytes = (value) => {
+    if (!value) return "0 B";
+    const unit = Math.min(3, Math.floor(Math.log(value) / Math.log(1024)));
+    return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${["B", "KB", "MB", "GB"][unit]}`;
+  };
+  function progressCard(title) {
+    const card = document.createElement("article"); card.className = "upload-item local-progress-card";
+    card.innerHTML = `<strong></strong><div class="local-progress-heading"><span class="local-phase"></span><b class="local-percent"></b></div>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill"></div></div>
+      <p class="local-transfer-numbers"></p><p class="local-progress-message" role="status"></p>`;
+    card.querySelector("strong").textContent = title;
+    const track = card.querySelector(".progress-track");
+    const fill = card.querySelector(".progress-fill");
+    return { card, update({ phase, percent = null, loaded = 0, total = 0, speed = 0, message = "", active = false, failed = false }) {
+      const known = Number.isFinite(percent);
+      card.dataset.active = String(active);
+      card.dataset.failed = String(failed);
+      card.querySelector(".local-phase").textContent = phase;
+      card.querySelector(".local-percent").textContent = known ? `${Math.floor(percent)}%` : "";
+      track.setAttribute("aria-label", phase);
+      if (known) track.setAttribute("aria-valuenow", Math.floor(percent)); else track.removeAttribute("aria-valuenow");
+      fill.style.width = known ? `${percent}%` : "35%";
+      fill.classList.toggle("is-indeterminate", active && !known);
+      card.querySelector(".local-transfer-numbers").textContent = total || loaded
+        ? `${bytes(loaded)} / ${total ? bytes(total) : "tamanho desconhecido"} · ${speed > 0 ? bytes(speed) + "/s" : "Aguardando dados"}` : "";
+      card.querySelector(".local-progress-message").textContent = message;
+    } };
+  }
+  async function copyFiles(body, title) {
+    const view = progressCard(title); copyList.append(view.card);
+    let latest = { phase: "copying", percent: null, loaded: 0, total: 0, speed: 0 };
+    let changedAt = Date.now();
+    const paint = () => {
+      const idle = (Date.now() - changedAt) / 1000;
+      const waiting = latest.phase === "confirming";
+      const done = latest.phase === "done";
+      const failed = latest.phase === "error";
+      view.update({ ...latest, percent: waiting ? null : latest.percent,
+        phase: failed ? "Copia interrompida" : done ? "Recebido no PC" : waiting ? "Confirmando recebimento" : "Copiando para o PC",
+        speed: idle > 3 ? 0 : latest.speed,
+        active: !done && !failed && (waiting || idle < 10), failed,
+        message: failed ? "O auxiliar nao confirmou o recebimento. Tente enviar novamente."
+          : done ? "Copia confirmada. O processamento continua no auxiliar."
+          : waiting ? "Dados enviados. Aguardando o auxiliar confirmar a gravacao."
+          : idle >= 10 ? `Sem novos dados ha ${Math.floor(idle)}s. Verifique o auxiliar; nao ha progresso confirmado nesse periodo.`
+          : "Transferindo dados. Aguarde a confirmacao antes de fechar a pagina." });
+    };
+    paint();
+    const timer = window.setInterval(paint, 1000);
+    try {
+      await window.MegaRoomLocalTransfer.copyToHelper({ url: base + "/jobs", key, body, onProgress(progress) {
+        if (progress.loaded !== latest.loaded || progress.phase !== latest.phase) changedAt = Date.now();
+        latest = progress; paint();
+      } });
+    } catch (error) {
+      latest = { ...latest, phase: "error" }; paint();
+      view.card.querySelector(".local-progress-message").textContent = error.message;
+      throw error;
+    } finally {
+      window.clearInterval(timer);
+      while (copyList.children.length > 5) copyList.firstElementChild.remove();
+    }
+  }
   input.value = key;
   const say = (text) => { message.textContent = text; panel.open = true; };
   async function request(route, options = {}) {
@@ -50,32 +116,55 @@
     polling = true;
     try {
       const jobs = await request("/jobs");
-      jobsList.replaceChildren();
+      const visible = new Set(jobs.slice(-20).map((job) => job.id));
+      for (const [id, view] of jobCards) {
+        if (!visible.has(id)) { view.card.remove(); jobCards.delete(id); transferSamples.delete(id); }
+      }
       for (const job of jobs.slice(-20).reverse()) {
-        const card = document.createElement("article"); card.className = "upload-item";
-        const title = document.createElement("strong"); title.textContent = job.title;
-        const detail = document.createElement("p");
-        detail.textContent = job.processing?.status === "processing"
-          ? `${job.processing.message} (${job.processing.percent}%)`
-          : `${job.message}${job.status === "uploading" ? ` ${job.percent}%` : ""}`;
-        card.append(title, detail);
-        if (job.status === "error") {
+        let view = jobCards.get(job.id);
+        if (!view) { view = progressCard(job.title); jobCards.set(job.id, view); jobsList.append(view.card); }
+        const uploading = job.status === "uploading";
+        const now = Date.now();
+        const previous = transferSamples.get(job.id);
+        const changed = !previous || job.loaded !== previous.loaded;
+        const changedAt = changed ? now : previous.changedAt;
+        const measuredSpeed = previous && now > previous.at && job.loaded >= previous.loaded
+          ? (job.loaded - previous.loaded) / ((now - previous.at) / 1000) : 0;
+        transferSamples.set(job.id, { at: now, loaded: job.loaded, changedAt });
+        const stale = now - (job.lastTransferAt || changedAt) > 10000;
+        const processing = ["processing", "preparing"].includes(job.processing?.status);
+        view.update({ phase: uploading ? "Enviando para a VPS" : job.status === "done" ? "Concluido" : job.status === "error" ? "Falha" : job.status === "queued" ? "Na fila do PC" : "Processando no PC",
+          percent: uploading || job.status === "done" ? job.percent : processing ? job.processing.percent : null,
+          loaded: uploading ? job.loaded : 0, total: uploading ? job.total : 0,
+          speed: stale ? 0 : job.speedBytesPerSecond ?? measuredSpeed,
+          active: ["processing", "uploading"].includes(job.status) && !stale, failed: job.status === "error",
+          message: stale && uploading ? "Sem novos dados de envio. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
+        const previousRetry = view.card.querySelector("button");
+        if (job.status !== "error") previousRetry?.remove();
+        if (job.status === "error" && !previousRetry) {
           const retry = document.createElement("button"); retry.className = "mini-btn"; retry.textContent = "Tentar novamente";
           retry.addEventListener("click", async () => {
             retry.disabled = true;
             try { await request(`/jobs/${job.id}/retry`, { method: "POST" }); }
             catch (error) { say(error.message); }
             finally { retry.disabled = false; }
-          }); card.append(retry);
+          }); view.card.append(retry);
         }
-        jobsList.append(card);
       }
       // Update the catalogue without reloading the player.
       const completed = jobs.filter((job) => job.status === "done").map((job) => job.id).join(",");
       if (completed !== lastCompleted && typeof loadLibrary === "function") {
         lastCompleted = completed; await loadLibrary(true, { syncRoute: false });
       }
-    } catch (error) { say(error.message); connected = false; }
+    } catch (error) {
+      say(error.message); connected = false;
+      for (const view of jobCards.values()) {
+        if (view.card.dataset.active !== "true") continue;
+        view.card.dataset.active = "false";
+        view.card.querySelector(".progress-fill").classList.remove("is-indeterminate");
+        view.card.querySelector(".local-progress-message").textContent = "Sem conexao com o auxiliar. Reconecte para confirmar o progresso.";
+      }
+    }
     finally {
       polling = false;
       if (connected) pollTimer = window.setTimeout(() => { if (!document.hidden) poll(); }, 3000);
@@ -119,7 +208,7 @@
           for (const file of group) body.append("videos", file);
           if (form.elements.cover.files[0]) body.append("cover", form.elements.cover.files[0]);
           say("Copiando arquivo para o auxiliar no PC. Aguarde antes de fechar esta pagina.");
-          await request("/jobs", { method: "POST", body });
+          await copyFiles(body, meta.title || group[0].name);
         }
         form.reset();
         say("Arquivos recebidos no PC. O auxiliar continuara processando e enviando mesmo com F5. Mantenha o PC ligado e a janela do auxiliar aberta.");
