@@ -6,6 +6,17 @@ const os = require("node:os");
 const { spawn, execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { artifactPath } = require("./local-import");
+const { mergeMasters } = require("./existing-local");
+
+test("adding a local quality keeps old segments and uses immutable paths for new segments", () => {
+  const previous = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1200000\n480p/index.m3u8\n';
+  const incoming = '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,URI="audio/stream-1/index.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=2500000\n720p/index.m3u8\n';
+  const merged = mergeMasters(previous, incoming, "movie_123_test", "local-batch");
+  assert.match(merged, /\/streams\/movie_123_test\/hls\/480p\/index.m3u8/);
+  assert.match(merged, /\/streams\/movie_123_test\/local-batch\/hls\/720p\/index.m3u8/);
+  assert.match(merged, /URI="\/streams\/movie_123_test\/local-batch\/hls\/audio\/stream-1\/index.m3u8"/);
+  assert.throws(() => mergeMasters("", incoming.replace("720p/index.m3u8", "../720p/index.m3u8"), "movie_123_test", "batch"));
+});
 
 test("import rejects traversal and remote asset references", () => {
   assert.throws(() => artifactPath("asset-0:../../server.js", 1));
@@ -43,7 +54,7 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const subtitle = path.join(pc, "source.srt");
     await fs.writeFile(subtitle, "1\n00:00:00,000 --> 00:00:01,500\nTeste local\n");
     const movie = path.join(pc, "source.mkv");
-    await promisify(execFile)(require("ffmpeg-static"), ["-y", "-f", "lavfi", "-i", "testsrc2=size=854x480:rate=24:duration=2",
+    await promisify(execFile)(require("ffmpeg-static"), ["-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=24:duration=2",
       "-f", "lavfi", "-i", "sine=duration=2", "-i", subtitle, "-map", "0:v", "-map", "1:a", "-map", "2:s",
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "srt",
       "-metadata:s:a:0", "language=por", "-metadata:s:s:0", "language=por", movie], { windowsHide: true });
@@ -82,6 +93,9 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const original = await (await fetch(origin + `/api/playback/${entryId}?original=1`, { headers: credentials })).json();
     assert.equal(original.status, "ready");
     assert.match(original.source, /original-audio/);
+    assert.equal((await fetch(origin + original.source, { method: "HEAD", headers: credentials })).status, 200);
+    assert.ok(library.items[0].video.src.includes(`/uploads/${library.items[0].folder}/originals/`), "Imported source must include staging folder");
+    assert.equal((await fetch(origin + "/uploads/missing-file.mp4", { method: "HEAD", headers: credentials })).status, 404);
     assert.ok(!logs.some((line) => line.includes("[HLS] inicio")), "VPS must not encode video");
     const repeated = await fetch(origin + `/api/local-import/transfer/${ticket.id}`, { method: "POST", headers: { "X-Import-Token": ticket.token } });
     assert.equal(repeated.status, 200);
@@ -110,6 +124,57 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
       assert.equal(ready.playbackType, "hls");
       assert.equal(ready.subtitleTracks[0].status, "ready");
     }
+    // Simulate a catalogue written by the old importer and an unoptimized upload.
+    const libraryPath = path.join(remote, "data", "library.json");
+    const stored = JSON.parse(await fs.readFile(libraryPath, "utf8"));
+    const film = stored.items.find((item) => item.id === entryId);
+    const correctSource = film.video.src;
+    film.video.src = "/uploads/originals/" + path.basename(correctSource);
+    film.localAnalysis.requiresPreparedStream = false;
+    const unoptimized = JSON.parse(JSON.stringify(film));
+    unoptimized.id = "movie_1234_unoptimized";
+    unoptimized.processing = { enabled: false, qualities: [] };
+    delete unoptimized.localImportId;
+    stored.items.push(unoptimized);
+    await fs.writeFile(libraryPath, JSON.stringify(stored));
+    const repaired = await (await fetch(origin + `/api/playback/${entryId}`, { headers: credentials })).json();
+    assert.equal(repaired.fallbackSource, correctSource);
+    assert.equal((await fetch(origin + repaired.fallbackSource, { method: "HEAD", headers: credentials })).status, 200);
+    const oldFiles = await fs.stat(path.join(remote, "streams", entryId, "hls", "480p", "index.m3u8"));
+    await fetch(origin + `/api/progress/${entryId}`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ position: 0.5, duration: 2 }) });
+    async function reoptimize(targetId, quality) {
+      const authorization = await fetch(origin + `/api/media/${targetId}/local-ticket`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [quality] }) });
+      assert.equal(authorization.status, 200);
+      const remoteTicket = await authorization.json();
+      assert.equal((await fetch(origin + `/api/media/${targetId}/optimize`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [quality] }) })).status, 409);
+      const submittedRemote = await fetch(base + "/jobs/from-server", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ ticket: remoteTicket, profile: "economy" }) });
+      assert.equal(submittedRemote.status, 202, await submittedRemote.text());
+      let current;
+      for (let i = 0; i < 200; i++) {
+        const active = await (await fetch(base + "/jobs", { headers })).json();
+        current = active.find((job) => !["done"].includes(job.status));
+        if (!current) return;
+        assert.notEqual(current.status, "error", current.message);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.fail("Reoptimization did not complete");
+    }
+    await reoptimize(entryId, 720);
+    const upgraded = await (await fetch(origin + `/api/playback/${entryId}`, { headers: credentials })).json();
+    assert.deepEqual(upgraded.qualities, [720, 480]);
+    const masterText = await (await fetch(origin + upgraded.source, { headers: credentials })).text();
+    const mediaUris = masterText.split(/\r?\n/).filter((line) => line && !line.startsWith("#"));
+    for (const uri of mediaUris) assert.equal((await fetch(origin + uri, { headers: credentials })).status, 200);
+    assert.equal((await fs.stat(path.join(remote, "streams", entryId, "hls", "480p", "index.m3u8"))).mtimeMs, oldFiles.mtimeMs);
+    const progress = await (await fetch(origin + "/api/progress", { headers: credentials })).json();
+    assert.equal(progress[entryId].position, 0.5);
+    await reoptimize(unoptimized.id, 480);
+    const newlyOptimized = await (await fetch(origin + `/api/playback/${unoptimized.id}`, { headers: credentials })).json();
+    assert.equal(newlyOptimized.playbackType, "hls");
+    const finalCatalogue = await (await fetch(origin + "/api/library", { headers: credentials })).json();
+    assert.equal(finalCatalogue.items.length, 3, "Reoptimization must not create duplicate movies");
+    assert.equal(finalCatalogue.items.find((item) => item.id === entryId).video.src, correctSource);
+    assert.ok(!logs.some((line) => line.includes("[HLS] inicio")), "VPS must not encode existing local jobs either");
     assert.equal((await fs.readdir(path.join(pc, "uploads"))).length, 0, "Completed local input must be cleaned");
   } finally {
     if (previousRoot === undefined) delete process.env.MEGAROOM_MEDIA_ROOT; else process.env.MEGAROOM_MEDIA_ROOT = previousRoot;

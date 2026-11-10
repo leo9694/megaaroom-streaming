@@ -6,6 +6,7 @@
   let lastCompleted = "";
   let pollTimer;
   let canDelete = false;
+  let canOptimizeExisting = false;
   const panel = document.createElement("details");
   panel.className = "processing-options local-helper-panel";
   panel.innerHTML = `<summary>Processamento neste computador</summary>
@@ -22,6 +23,9 @@
   const input = panel.querySelector("input");
   const resourceSelect = panel.querySelector(".local-resource-profile");
   const resourceMessage = panel.querySelector(".local-resource-message");
+  const optimizeResource = document.getElementById("optimizeResource");
+  const optimizationLocation = document.getElementById("optimizationLocation");
+  const localControls = document.getElementById("optimizeLocalControls");
   let savedProfile;
   const renderSettings = (settings) => {
     resourceSelect.replaceChildren();
@@ -31,6 +35,8 @@
       resourceSelect.append(option);
     }
     resourceSelect.value = savedProfile = settings.profile;
+    optimizeResource.replaceChildren(...[...resourceSelect.options].map((option) => option.cloneNode(true)));
+    optimizeResource.value = settings.profile;
     resourceSelect.disabled = false;
     resourceMessage.textContent = `${settings.cpuCount} processadores logicos detectados. A escolha e salva neste PC e vale a partir da proxima etapa. Maximo pode deixar o PC ocupado; nao e uma porcentagem fixa de CPU.`;
   };
@@ -40,6 +46,14 @@
       renderSettings(await request("/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: resourceSelect.value }) }));
     } catch (error) { resourceSelect.value = savedProfile; resourceMessage.textContent = error.message; }
     finally { resourceSelect.disabled = false; }
+  });
+  optimizeResource.addEventListener("change", () => { resourceSelect.value = optimizeResource.value; resourceSelect.dispatchEvent(new Event("change")); });
+  optimizationLocation.addEventListener("change", () => {
+    const local = optimizationLocation.value === "local";
+    document.getElementById("optimizeResourceField").classList.toggle("hidden", !local);
+    localControls.classList.toggle("hidden", !local);
+    (local ? localControls : document.querySelector(".upload-card")).append(panel);
+    if (local) { panel.open = true; if (key) connect().catch((error) => say(error.message)); }
   });
   const copyList = panel.querySelector(".local-copy-list");
   const jobCards = new Map();
@@ -132,6 +146,7 @@
     }
     if (!health.ffmpeg) throw new Error("FFmpeg nao instalado no auxiliar. Execute novamente o instalador para instalar o FFmpeg incluido.");
     canDelete = health.features?.includes("delete-failed") || false;
+    canOptimizeExisting = health.features?.includes("optimize-existing") || false;
     if (health.features?.includes("resource-profiles")) {
       try { renderSettings(await request("/settings")); }
       catch (error) { resourceSelect.disabled = true; resourceMessage.textContent = error.message; }
@@ -158,6 +173,8 @@
         let view = jobCards.get(job.id);
         if (!view) { view = progressCard(job.title); jobCards.set(job.id, view); jobsList.append(view.card); }
         const uploading = job.status === "uploading";
+        const downloading = job.status === "downloading";
+        const transferring = uploading || downloading;
         const now = Date.now();
         const previous = transferSamples.get(job.id);
         const changed = !previous || job.loaded !== previous.loaded;
@@ -167,12 +184,12 @@
         transferSamples.set(job.id, { at: now, loaded: job.loaded, changedAt });
         const stale = now - (job.lastTransferAt || changedAt) > 10000;
         const processing = ["processing", "preparing"].includes(job.processing?.status);
-        view.update({ phase: uploading ? "Enviando para a VPS" : job.status === "done" ? "Concluido" : job.status === "error" ? "Falha" : job.status === "queued" ? "Na fila do PC" : "Processando no PC",
-          percent: uploading || job.status === "done" ? job.percent : processing ? job.processing.percent : null,
-          loaded: uploading ? job.loaded : 0, total: uploading ? job.total : 0,
+        view.update({ phase: downloading ? "Baixando original para o PC" : uploading ? "Enviando para a VPS" : job.status === "done" ? "Concluido" : job.status === "error" ? "Falha" : job.status === "queued" ? "Na fila do PC" : "Processando no PC",
+          percent: transferring || job.status === "done" ? job.percent : processing ? job.processing.percent : null,
+          loaded: transferring ? job.loaded : 0, total: transferring ? job.total : 0,
           speed: stale ? 0 : job.speedBytesPerSecond ?? measuredSpeed,
-          active: ["processing", "uploading"].includes(job.status) && !stale, failed: job.status === "error",
-          message: stale && uploading ? "Sem novos dados de envio. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
+          active: ["processing", "uploading", "downloading"].includes(job.status) && !stale, failed: job.status === "error",
+          message: stale && transferring ? "Sem novos dados de transferencia. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
         const previousActions = view.card.querySelector(".local-job-actions");
         if (job.status !== "error") previousActions?.remove();
         if (job.status === "error" && !previousActions) {
@@ -229,6 +246,7 @@
     const location = field.querySelector("select");
     location.addEventListener("change", () => {
       if (location.value === "local") {
+        document.querySelector(".upload-card").append(panel);
         form.elements.processVideo.checked = true;
         form.dispatchEvent(new Event("change"));
         panel.open = true;
@@ -237,6 +255,7 @@
     form.addEventListener("submit", async (event) => {
       if (!form.elements.processVideo.checked || location.value !== "local") return;
       event.preventDefault(); event.stopImmediatePropagation();
+      document.querySelector(".upload-card").append(panel);
       const button = form.querySelector('[type="submit"]'); button.disabled = true;
       try {
         await connect();
@@ -267,5 +286,21 @@
       finally { button.disabled = false; }
     }, true);
   }
+  window.MegaRoomLocal = { async optimizeExisting(entryId, qualities, profile) {
+    localControls.classList.remove("hidden"); localControls.append(panel); panel.open = true;
+    await connect();
+    if (!canOptimizeExisting) throw new Error("Atualize o auxiliar pelo instalador para otimizar midias ja enviadas no PC.");
+    const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/local-ticket`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
+    });
+    const ticket = await response.json();
+    if (!response.ok) throw new Error(ticket.error || "Falha ao autorizar otimizacao local.");
+    if (ticket.ready) return ticket;
+    await request("/jobs/from-server", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket, profile }) });
+    renderSettings(await request("/settings"));
+    say("Otimizacao iniciada no PC: o auxiliar baixara o original e enviara as qualidades prontas para a mesma midia. Mantenha o PC e o auxiliar ligados.");
+    poll();
+    return { message: "Na fila do PC. Acompanhe abaixo o download, processamento e envio. Ao concluir, reabra o video para usar as qualidades." };
+  } };
   if (key && window.isSecureContext) connect().catch(() => {});
 })();

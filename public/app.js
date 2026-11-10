@@ -809,6 +809,12 @@ optimizeForm.addEventListener("submit", async (event) => {
   button.disabled = true;
   optimizeMessage.textContent = "Solicitando otimizacao...";
   try {
+    if (optimizeForm.elements.optimizationLocation.value === "local") {
+      if (!window.MegaRoomLocal?.optimizeExisting) throw new Error("Recarregue a pagina para carregar o auxiliar local.");
+      const payload = await window.MegaRoomLocal.optimizeExisting(entryId, qualities, optimizeForm.elements.cpuProfile.value);
+      if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = payload.message;
+      return;
+    }
     const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/optimize`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
     });
@@ -981,6 +987,11 @@ function attachPlaybackSource(entryId, payload) {
     renderQualitySelector(payload.hls.qualities.map((height) => ({ height, levelIndex: null })));
   }
 }
+
+detailPlayer.addEventListener("error", () => {
+  if (state.playbackType !== "direct") return;
+  showPlaybackStatus("Nao foi possivel reproduzir este arquivo original. Verifique a conexao; se persistir, selecione Auto ou otimize uma qualidade compativel abaixo.");
+});
 
 function attachDirectPlayback(entryId, source) {
   const absoluteSrc = new URL(source, window.location.origin).href;

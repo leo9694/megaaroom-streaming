@@ -27,7 +27,7 @@ async function sendPrepared(origin, job, root, onProgress) {
   const add = (field, file, filename, mime = "application/octet-stream") => parts.push({ field, file, filename: filename.replace(/["\r\n]/g, "_"), mime });
   for (let i = 0; i < job.files.length; i++) {
     const file = job.files[i];
-    add(`source-${i}`, file.path, file.originalname, file.mimetype);
+    if (!job.remote) add(`source-${i}`, file.path, file.originalname, file.mimetype);
     for await (const relative of walk(path.join(root, "streams", job.entries[i].entryId))) {
       add(`asset-${i}:${relative}`, path.join(root, "streams", job.entries[i].entryId, relative), path.basename(relative));
     }
@@ -52,7 +52,7 @@ async function sendPrepared(origin, job, root, onProgress) {
     }
     yield end;
   }
-  const url = new URL(`/api/local-import/transfer/${job.ticket.id}`, origin);
+  const url = new URL(`/api/local-import/transfer/${job.remote ? "existing/" : ""}${job.ticket.id}`, origin);
   const http = require(url.protocol === "https:" ? "node:https" : "node:http");
   await new Promise((resolve, reject) => {
     const request = http.request(url, { method: "POST", headers: {
@@ -69,6 +69,38 @@ async function sendPrepared(origin, job, root, onProgress) {
     });
     request.on("error", reject);
     pipeline(Readable.from(content()), request).catch(reject);
+  });
+}
+
+async function downloadOriginal(origin, job, root, onProgress) {
+  const folder = path.join(root, "uploads", job.id); fs.mkdirSync(folder, { recursive: true });
+  const ext = path.extname(job.remote.filename).replace(/[^\w.]/g, "") || ".mp4";
+  const file = path.join(folder, "source" + ext);
+  const url = new URL(`/api/local-import/transfer/existing/${job.ticket.id}/source`, origin);
+  const http = require(url.protocol === "https:" ? "node:https" : "node:http");
+  await new Promise((resolve, reject) => {
+    const request = http.get(url, { headers: { "X-Import-Token": job.ticket.token } }, (response) => {
+      if (response.statusCode !== 200) { response.resume(); reject(new Error(`Nao foi possivel baixar o original (${response.statusCode}).`)); return; }
+      const total = Number(response.headers["content-length"]) || 0;
+      let loaded = 0;
+      response.on("data", (chunk) => { loaded += chunk.length; onProgress(loaded, total); });
+      pipeline(response, fs.createWriteStream(file + ".part"))
+        .then(() => fsp.rename(file + ".part", file)).then(resolve, reject);
+    });
+    request.on("error", reject);
+  });
+  return { path: file, originalname: job.remote.filename, mimetype: "application/octet-stream", size: (await fsp.stat(file)).size };
+}
+
+async function cancelRemote(origin, job) {
+  if (!job.remote) return;
+  const url = new URL(`/api/local-import/transfer/existing/${job.ticket.id}/cancel`, origin);
+  const http = require(url.protocol === "https:" ? "node:https" : "node:http");
+  await new Promise((resolve, reject) => {
+    const request = http.request(url, { method: "POST", headers: { "X-Import-Token": job.ticket.token } }, (response) => {
+      response.resume();
+      response.on("end", () => response.statusCode < 300 || [403, 404].includes(response.statusCode) ? resolve() : reject(new Error("Nao foi possivel liberar a otimizacao na VPS.")));
+    }); request.on("error", reject); request.end();
   });
 }
 
@@ -116,7 +148,7 @@ async function createHelper({ origin, root, key, engine }) {
       return true;
     } catch { return false; }
   };
-  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 2, features: ["resource-profiles", "delete-failed"] }));
+  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 3, features: ["resource-profiles", "delete-failed", "optimize-existing"] }));
   app.get("/settings", (req, res) => res.json(settings()));
   app.post("/settings", (req, res) => {
     if (!profiles.some((item) => item.id === req.body?.profile)) return res.status(400).json({ error: "Perfil invalido." });
@@ -137,6 +169,21 @@ async function createHelper({ origin, root, key, engine }) {
   app.get("/jobs", (req, res) => res.json([...jobs.values()].map(snapshot)));
   const start = (job) => queue(() => withMediaPolicy(() => profiles.find((item) => item.id === profile), async () => {
     try {
+      if (job.remote && !job.files?.length) {
+        job.status = "downloading"; job.message = "Baixando original da VPS para processar no PC.";
+        job.loaded = 0; job.total = 0; job.percent = 0; job.speedBytesPerSecond = 0; persist(job);
+        let sampleAt = Date.now(); let sampleLoaded = 0;
+        const file = await downloadOriginal(origin, job, root, (loaded, total) => {
+          const now = Date.now(); job.loaded = loaded; job.total = total;
+          job.percent = total ? Math.floor(loaded / total * 100) : 0; job.lastTransferAt = now;
+          if (now - sampleAt > 500) {
+            job.speedBytesPerSecond = (loaded - sampleLoaded) / ((now - sampleAt) / 1000);
+            sampleAt = now; sampleLoaded = loaded; persist(job);
+          }
+        });
+        const item = engine.buildMovieItem(file, { title: job.title, processing: { enabled: true, qualities: job.remote.qualities } }, null);
+        job.files = [file]; job.entries = [engine.findEntryById({ items: [item] }, item.id)]; persist(job);
+      }
       job.status = "processing"; job.message = "Preparando video, audio e legendas no PC."; persist(job);
       job.analyses = [];
       for (const entry of job.entries) {
@@ -183,6 +230,7 @@ async function createHelper({ origin, root, key, engine }) {
     if (job.status !== "error") return res.status(409).json({ error: "Somente trabalhos com erro podem ser apagados." });
     job.status = "deleting";
     try {
+      await cancelRemote(origin, job);
       if (!/^[a-f0-9]{32}$/.test(job.id)) throw new Error("Identificador invalido.");
       const targets = [path.resolve(root, "uploads", job.id)];
       for (const entry of job.entries || []) {
@@ -206,6 +254,25 @@ async function createHelper({ origin, root, key, engine }) {
     const job = jobs.get(req.params.id);
     if (!job || job.status !== "error") return res.sendStatus(409);
     job.status = "queued"; persist(job); start(job); res.json(snapshot(job));
+  });
+  app.post("/jobs/from-server", async (req, res) => {
+    try {
+      if (!await binaries()) return res.status(503).json({ error: "Instale o FFmpeg pelo instalador do auxiliar." });
+      const ticket = req.body?.ticket;
+      if (!ticket || !/^[a-f0-9]{48}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) || typeof ticket.filename !== "string" || typeof ticket.title !== "string") throw new Error("Autorizacao invalida.");
+      const processing = parseProcessing({ enabled: true, qualities: ticket.qualities });
+      if (req.body.profile && !profiles.some((item) => item.id === req.body.profile)) throw new Error("Perfil invalido.");
+      const duplicate = [...jobs.values()].find((job) => job.ticket.id === ticket.id);
+      if (duplicate) return res.json(snapshot(duplicate));
+      if (req.body.profile) {
+        fs.writeFileSync(settingsFile + ".tmp", JSON.stringify({ profile: req.body.profile }));
+        fs.renameSync(settingsFile + ".tmp", settingsFile); profile = req.body.profile;
+      }
+      const job = { id: crypto.randomBytes(16).toString("hex"), title: ticket.title,
+        ticket: { id: ticket.id, token: ticket.token }, remote: { filename: path.basename(ticket.filename), qualities: processing.qualities },
+        entries: [], files: [], status: "queued", message: "Na fila para baixar o original." };
+      jobs.set(job.id, job); persist(job); start(job); res.status(202).json(snapshot(job));
+    } catch (error) { res.status(400).json({ error: error.message }); }
   });
   app.post("/jobs", async (req, res, next) => {
     if (!await binaries()) return res.status(503).json({ error: "FFmpeg ausente. Execute novamente o instalador do auxiliar." });

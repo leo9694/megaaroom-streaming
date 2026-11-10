@@ -161,4 +161,4 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
   return { ticket, transfer };
 }
 
-module.exports = { createLocalImport, artifactPath, verifyPlaylists };
+module.exports = { createLocalImport, artifactPath, verifyPlaylists, validateAnalysis };

@@ -27,6 +27,12 @@ const localImport = require("./local-import").createLocalImport({
   readLibrary: (...args) => readLibrary(...args),
   updateLibrary: (...args) => updateLibrary(...args)
 });
+const existingLocal = require("./existing-local").createExistingLocal({ root: ROOT,
+  readLibrary: (...args) => readLibrary(...args), updateLibrary: (...args) => updateLibrary(...args),
+  findEntryById: (...args) => findEntryById(...args), analyzePlayback: (...args) => analyzePlayback(...args),
+  getHlsRenditions: (...args) => getHlsRenditions(...args), readHlsQualities: (...args) => readHlsQualities(...args),
+  busy: (id) => optimizationRequests.has(id) || queuedPreparationJobs.has(id) || hlsJobs.has(id)
+});
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -106,6 +112,7 @@ const coverStorage = multer.diskStorage({
 const coverUpload = multer({ storage: coverStorage });
 
 app.use(express.json({ limit: "2mb" }));
+app.use("/api/local-import/transfer/existing", existingLocal.transfer);
 app.use("/api/local-import/transfer", localImport.transfer);
 app.use((req, res, next) => {
   if (!accessProtectionEnabled) {
@@ -154,12 +161,24 @@ app.use("/streams", express.static(STREAMS_DIR, {
     }
   }
 }));
+app.use(["/uploads", "/streams"], (req, res) => res.status(404).send("Arquivo de midia nao encontrado."));
 app.use(express.static(path.join(ROOT, "public")));
 app.post("/api/local-import/ticket", localImport.ticket);
+app.post("/api/media/:entryId/local-ticket", existingLocal.ticket);
 
 async function readLibrary() {
   const raw = await fsp.readFile(LIBRARY_FILE, "utf8");
-  return JSON.parse(raw);
+  const library = JSON.parse(raw);
+  // Early local imports lost the staging folder in original and cover URLs.
+  for (const item of library.items) {
+    if (!/^local-[a-f0-9]{48}$/.test(item.folder || "")) continue;
+    for (const file of [item.video, item.cover, ...(item.episodes || [])].filter(Boolean)) {
+      if (!file.src?.startsWith("/uploads/originals/")) continue;
+      const repaired = `/uploads/${item.folder}/originals/${path.basename(file.src)}`;
+      if (fs.existsSync(srcToAbsolutePath(repaired))) file.src = repaired;
+    }
+  }
+  return library;
 }
 
 async function writeLibrary(data) {
@@ -276,7 +295,7 @@ async function removeDirectoryIfExists(targetPath, attempts = 5) {
 }
 
 function fileToSrc(file) {
-  return `/uploads/${path.basename(path.dirname(file.path))}/${path.basename(file.path)}`;
+  return `/uploads/${path.relative(UPLOADS_DIR, file.path).split(path.sep).join("/")}`;
 }
 
 function coverToData(file) {
@@ -647,7 +666,7 @@ async function ensureHlsDiskSpace(sourcePath, analysis, renditions) {
 function readHlsQualities(masterPath) {
   try {
     const playlist = fs.readFileSync(masterPath, "utf8");
-    return [...playlist.matchAll(/#EXT-X-STREAM-INF:[^\n]*\n(?:\.\/)?(\d+)p\/index\.m3u8/g)]
+    return [...playlist.matchAll(/#EXT-X-STREAM-INF:[^\n]*\n(?:[^\r\n]*\/)?(\d+)p\/index\.m3u8/g)]
       .map((match) => Number(match[1]))
       .filter((height, index, values) => Number.isFinite(height) && values.indexOf(height) === index)
       .sort((a, b) => b - a);
@@ -1130,6 +1149,7 @@ async function queuePreparationForEntry(entryId) {
 }
 
 function enqueuePreparationForEntry(entryId) {
+  if (existingLocal.isReserved(entryId)) return Promise.resolve();
   if (queuedPreparationJobs.has(entryId)) {
     return queuedPreparationJobs.get(entryId);
   }
@@ -1158,7 +1178,7 @@ const optimizationRequests = new Set();
 
 app.post("/api/media/:entryId/optimize", async (req, res) => {
   const { entryId } = req.params;
-  if (optimizationRequests.has(entryId) || queuedPreparationJobs.has(entryId) || hlsJobs.has(entryId)) {
+  if (optimizationRequests.has(entryId) || queuedPreparationJobs.has(entryId) || hlsJobs.has(entryId) || existingLocal.isReserved(entryId)) {
     return res.status(409).json({ error: "Esta midia ja esta na fila de processamento." });
   }
   let processing;
@@ -1287,7 +1307,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
       });
     }
 
-    if (!analysis.requiresPreparedStream) {
+    if (!analysis.requiresPreparedStream && !(original && selectedTrack && fs.existsSync(getPreparedVariantPath(entry.entryId, selectedTrack, true).filePath))) {
       return res.json({
         status: "ready",
         playbackType: "direct",

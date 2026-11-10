@@ -2,6 +2,28 @@
 
 ## Local PC helper
 
+The existing-media optimization form also offers VPS/local and CPU profile
+selection, even for uploads originally sent with processing disabled. The local
+helper v3 downloads only the authorized original, prepares selected HLS outputs,
+and streams artifacts back to the existing movie/episode. Ticket URLs restrict
+download/upload to one entry; no VPS login credentials are shared. A reservation
+blocks simultaneous server HLS generation while that ticket remains pending.
+Delete a failed local task to cancel the reservation, or retry the same task.
+Tickets expire in seven days. The helper must remain running throughout download,
+processing and upload; jobs and progress persist as with initial local uploads.
+
+New output segments use immutable batch directories. Publication merges quality
+playlists and keeps prior segments so active players and saved watch progress are
+preserved. The original file is not reuploaded or replaced. Reopen playback after
+completion to see the extra qualities. The CPU setting uses the same saved local
+profile and takes effect from the next FFmpeg process.
+
+Legacy local imports whose source/cover URLs omitted the upload folder are
+repaired when reading the catalogue if the corresponding original exists. New
+imports generate relative URLs from the full uploads root. Original playback
+prefers an existing original-video AAC MP4, and missing media responds with 404
+instead of falling through to the app HTML page.
+
 The upload form can target the VPS or this computer. The local option requires
 the loopback helper (`npm run local-helper -- https://your-domain.example`).
 The Windows installer at `/install-local.ps1` installs Node.js if needed using

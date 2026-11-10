@@ -272,6 +272,8 @@
                     <summary class="mini-btn">Otimizar video</summary>
                     <form id="optimizeForm" class="upload-form">
                       <p id="optimizeTarget">Otimizar este filme</p>
+                      <label><span>Onde otimizar</span><select name="optimizationLocation" id="optimizationLocation"><option value="server">Na VPS</option><option value="local">Neste computador</option></select></label>
+                      <label id="optimizeResourceField" class="hidden"><span>Uso de CPU do PC</span><select name="cpuProfile" id="optimizeResource"><option value="economy">Economico</option><option value="balanced" selected>Equilibrado</option><option value="fast">Rapido</option><option value="maximum">Maximo</option></select></label>
                       <fieldset class="processing-qualities">
                         <legend>Qualidades desejadas</legend>
                         <label><input type="checkbox" name="quality" value="480" /> 480p</label>
@@ -281,6 +283,7 @@
                       <button type="submit" class="mini-btn">Iniciar otimizacao</button>
                       <p id="optimizeMessage" role="status" aria-live="polite"></p>
                     </form>
+                    <div id="optimizeLocalControls" class="hidden"></div>
                   </details>
                   <p id="detailSynopsis" class="detail-overview"></p>
                 </section>
