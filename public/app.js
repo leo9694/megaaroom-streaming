@@ -53,6 +53,7 @@ const statusMessage = document.getElementById("statusMessage");
 const movieForm = document.getElementById("movieForm");
 const seriesForm = document.getElementById("seriesForm");
 const addEpisodesForm = document.getElementById("addEpisodesForm");
+const addEpisodesUploadList = document.getElementById("addEpisodesUploadList");
 const uploadList = document.getElementById("uploadList");
 const activeUploadsBadge = document.getElementById("activeUploadsBadge");
 const emptyStateTemplate = document.getElementById("emptyStateTemplate");
@@ -585,6 +586,7 @@ addEpisodesForm.addEventListener("submit", (event) => {
   data.append("startEpisodeNumber", form.elements.startEpisodeNumber.value);
   files.forEach((file) => data.append("episodes", file));
   startTrackedUpload({ kind: "series", title: `${form.elements.title.value} - novos episodios`, subtitle: `${files.length} episodio(s)`,
+    mediaId: form.elements.targetSeriesId.value,
     url: `/api/series/${encodeURIComponent(form.elements.targetSeriesId.value)}/episodes`, formData: data });
   form.elements.episodes.value = "";
   document.getElementById("addEpisodesMessage").textContent = "Envio iniciado. Os novos episodios aparecerao na lista ao concluir.";
@@ -604,6 +606,7 @@ function updateAddEpisodesTarget(item) {
   first.defaultValue = String(next); if (untouched) first.value = String(next);
   for (const name of ["title", "genre", "year", "synopsis", "seasonNumber"]) addEpisodesForm.elements[name].value = item[name] || "";
   addEpisodesForm.elements.targetSeriesId.value = item.id;
+  renderUploadList();
 }
 
 function renderEpisodePanel(item) {
@@ -1438,10 +1441,11 @@ async function deleteMedia(id) {
   }
 }
 
-function startTrackedUpload({ kind, title, subtitle = "", url, formData }) {
+function startTrackedUpload({ kind, title, subtitle = "", url, formData, mediaId = null }) {
   const upload = {
     id: crypto.randomUUID ? crypto.randomUUID() : `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     kind,
+    mediaId,
     title,
     subtitle,
     percent: 0,
@@ -1569,6 +1573,16 @@ function renderUploadList() {
   const activeCount = uploads.filter((item) => item.status === "uploading").length;
   activeUploadsBadge.textContent = `${activeCount} ativo${activeCount === 1 ? "" : "s"}`;
 
+  const seasonUploads = uploads.filter((upload) => upload.mediaId && upload.mediaId === state.currentMediaId);
+  addEpisodesUploadList.innerHTML = seasonUploads.map(uploadCardMarkup).join("");
+  if (seasonUploads.length) {
+    const active = seasonUploads.filter((upload) => upload.status === "uploading").length;
+    document.getElementById("addEpisodesMessage").textContent = active
+      ? `${active} envio(s) em andamento. Acompanhe o progresso abaixo.`
+      : seasonUploads[0].status === "error" ? "Falha ao enviar novos episodios. Confira a mensagem abaixo."
+      : "Novos episodios recebidos. A lista da temporada foi atualizada.";
+  }
+
   if (!uploads.length) {
     uploadList.innerHTML = `
       <div class="upload-empty">
@@ -1579,9 +1593,11 @@ function renderUploadList() {
     return;
   }
 
-  uploadList.innerHTML = uploads
-    .map(
-      (upload) => `
+  uploadList.innerHTML = uploads.map(uploadCardMarkup).join("");
+}
+
+function uploadCardMarkup(upload) {
+  return `
         <article class="upload-item upload-${upload.status}">
           <div class="upload-item-head">
             <div>
@@ -1598,13 +1614,11 @@ function renderUploadList() {
             <span>${formatUploadSpeed(upload)}</span>
           </div>
           <div class="upload-item-meta">
-            <span>${upload.message}</span>
+            <span>${escapeHtml(upload.message)}</span>
             <span>${uploadStatusLabel(upload.status)}</span>
           </div>
         </article>
-      `
-    )
-    .join("");
+      `;
 }
 
 function updateUpload(id, nextFields) {
