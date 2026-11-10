@@ -316,6 +316,12 @@ if (require.main === module) (async () => {
   const server = app.listen(43123, "127.0.0.1", () => {
     console.log(`Auxiliar MegaRoom ativo para ${origin}\nCodigo para conectar no site: ${key}\nMantenha esta janela aberta durante o processamento e envio.`);
   });
+  server.once("error", (error) => {
+    console.error(error.code === "EADDRINUSE"
+      ? "Outro auxiliar ja esta aberto na porta 43123. Feche a janela antiga e abra novamente Iniciar-MegaRoom.cmd para carregar a versao atualizada."
+      : error.message);
+    process.exitCode = 1;
+  });
   server.requestTimeout = 0;
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
 

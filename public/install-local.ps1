@@ -16,9 +16,13 @@ try {
     New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
     $archive = Join-Path $installRoot 'download.zip'
     Write-Host 'Baixando auxiliar e instalando FFmpeg. Aguarde...'
-    Invoke-WebRequest 'https://github.com/leo9694/megaaroom-streaming/archive/refs/heads/main.zip' -OutFile $archive
+    $downloadUrl = 'https://github.com/leo9694/megaaroom-streaming/archive/refs/heads/main.zip?refresh=' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Invoke-WebRequest $downloadUrl -Headers @{ 'Cache-Control' = 'no-cache' } -OutFile $archive
     Expand-Archive -LiteralPath $archive -DestinationPath $installRoot -Force
     $appRoot = Join-Path $installRoot 'megaaroom-streaming-main'
+    if (!(Select-String -LiteralPath (Join-Path $appRoot 'local-helper.js') -Pattern 'optimize-existing' -Quiet)) {
+        throw 'O download trouxe uma versao antiga. Baixe o instalador novamente no site atualizado.'
+    }
     Push-Location -LiteralPath $appRoot
     try {
         & npm.cmd ci --omit=dev

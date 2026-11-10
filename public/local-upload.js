@@ -7,6 +7,7 @@
   let pollTimer;
   let canDelete = false;
   let canOptimizeExisting = false;
+  let helperVersion = 0;
   const panel = document.createElement("details");
   panel.className = "processing-options local-helper-panel";
   panel.innerHTML = `<summary>Processamento neste computador</summary>
@@ -145,6 +146,7 @@
       throw error;
     }
     if (!health.ffmpeg) throw new Error("FFmpeg nao instalado no auxiliar. Execute novamente o instalador para instalar o FFmpeg incluido.");
+    helperVersion = Number(health.version) || 1;
     canDelete = health.features?.includes("delete-failed") || false;
     canOptimizeExisting = health.features?.includes("optimize-existing") || false;
     if (health.features?.includes("resource-profiles")) {
@@ -155,7 +157,7 @@
       resourceMessage.textContent = "Atualize o auxiliar pelo instalador para liberar perfis de CPU e apagar falhas. Aguarde o processamento atual terminar antes de fecha-lo.";
     }
     connected = true; localStorage.setItem("megaaroom-local-key", key);
-    say("PC conectado. FFmpeg pronto para processar.");
+    say(`Auxiliar v${helperVersion} conectado. ${canOptimizeExisting ? "Pronto para otimizar arquivos novos e midias ja enviadas." : "Para otimizar midias ja enviadas, e necessario o auxiliar v3 ou superior. Feche e abra Iniciar-MegaRoom.cmd apos atualizar."}`);
     poll();
   }
   panel.querySelector(".local-connect").addEventListener("click", () => connect().catch((error) => say(error.message)));
@@ -289,7 +291,7 @@
   window.MegaRoomLocal = { async optimizeExisting(entryId, qualities, profile) {
     localControls.classList.remove("hidden"); localControls.append(panel); panel.open = true;
     await connect();
-    if (!canOptimizeExisting) throw new Error("Atualize o auxiliar pelo instalador para otimizar midias ja enviadas no PC.");
+    if (!canOptimizeExisting) throw new Error(`O auxiliar aberto responde como v${helperVersion}; esta funcao exige v3 ou superior. Feche a janela do auxiliar e abra novamente Iniciar-MegaRoom.cmd. Se continuar na versao antiga, baixe e execute novamente o instalador.`);
     const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/local-ticket`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
     });
