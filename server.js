@@ -527,7 +527,7 @@ function getPreparedVariantPath(entryId, track, original = false) {
   };
 }
 
-const { createSerialQueue, limitFfmpegArgs, lowerPriority } = require("./media-processing");
+const { createSerialQueue, limitFfmpegArgs, lowerPriority, getMediaPolicy } = require("./media-processing");
 const scheduleFfmpeg = createSerialQueue();
 
 const HLS_RENDITIONS = [
@@ -917,11 +917,12 @@ function getSubtitleSnapshot(entryId, subtitleTracks) {
 
 function runFfmpeg(args, onProgress, spawnOptions = {}) {
   return scheduleFfmpeg(() => new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, [...limitFfmpegArgs(args), "-progress", "pipe:1", "-nostats"], {
+    const policy = getMediaPolicy();
+    const proc = spawn(ffmpegPath, [...limitFfmpegArgs(args, policy), "-progress", "pipe:1", "-nostats"], {
       windowsHide: true,
       ...spawnOptions
     });
-    proc.once("spawn", () => lowerPriority(proc));
+    proc.once("spawn", () => lowerPriority(proc, policy));
     let stderr = "";
     let stdoutBuffer = "";
 

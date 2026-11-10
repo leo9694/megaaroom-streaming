@@ -34,7 +34,18 @@ in its MegaRoom `server` block use `client_max_body_size 0;`, and in the app
 location use `proxy_request_buffering off;`, `proxy_read_timeout 3600;` and
 `proxy_send_timeout 3600;`. Limit these changes to this app's domain. Node and
 the local helper disable the default request timeout for large file transfers.
-The helper uses the current conservative pipeline, with up to four threads.
+The helper has persistent CPU profiles: economy (up to two threads), balanced
+(half the logical CPUs), fast (three quarters), and maximum (all logical CPUs).
+Filters use at most eight threads. Fast/maximum use normal OS priority;
+economy/balanced use below-normal. These are codec thread limits, not CPU quotas.
+Changes apply when the next FFmpeg process starts; active processes continue
+with their original limits. AsyncLocalStorage scopes this policy to local jobs,
+leaving the VPS defaults unchanged. GPU encoding is not enabled by these profiles.
+Authenticated helper settings are available at GET/POST /settings. Failed jobs
+can be removed with POST /jobs/:id/delete; deletion is blocked for other states
+and resolved temporary paths are validated before removal. Removal only touches
+the job's helper uploads, generated streams, and job record, not original user
+files or published VPS media. Update the installed helper to enable these APIs.
 
 Run `node --test local-processing.test.js` for real FFmpeg + authenticated
 receiver coverage, independent of production. This validates local components,

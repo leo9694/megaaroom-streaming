@@ -11,7 +11,7 @@ const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 const { parseProcessing } = require("./processing-options");
 if (require.main === module) process.env.MEDIA_THREADS ||= "4";
-const { createSerialQueue } = require("./media-processing");
+const { createSerialQueue, withMediaPolicy, localProfiles } = require("./media-processing");
 
 async function* walk(folder, relative = "") {
   for (const entry of await fsp.readdir(path.join(folder, relative), { withFileTypes: true })) {
@@ -78,6 +78,15 @@ async function createHelper({ origin, root, key, engine }) {
   const queue = createSerialQueue();
   const jobsDir = path.join(root, "local-jobs");
   fs.mkdirSync(jobsDir, { recursive: true });
+  const profiles = localProfiles();
+  const settingsFile = path.join(root, "local-settings.json");
+  let profile = "balanced";
+  try {
+    const saved = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    if (profiles.some((item) => item.id === saved.profile)) profile = saved.profile;
+  } catch { /* First run uses the balanced profile. */ }
+  const settings = () => ({ profile, profiles: profiles.map(({ priority, ...item }) => item),
+    cpuCount: os.availableParallelism ? os.availableParallelism() : os.cpus().length });
   const persist = (job) => {
     const file = path.join(jobsDir, job.id + ".json");
     fs.writeFileSync(file + ".tmp", JSON.stringify(job)); fs.renameSync(file + ".tmp", file);
@@ -107,7 +116,17 @@ async function createHelper({ origin, root, key, engine }) {
       return true;
     } catch { return false; }
   };
-  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 1 }));
+  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 2, features: ["resource-profiles", "delete-failed"] }));
+  app.get("/settings", (req, res) => res.json(settings()));
+  app.post("/settings", (req, res) => {
+    if (!profiles.some((item) => item.id === req.body?.profile)) return res.status(400).json({ error: "Perfil invalido." });
+    try {
+      fs.writeFileSync(settingsFile + ".tmp", JSON.stringify({ profile: req.body.profile }));
+      fs.renameSync(settingsFile + ".tmp", settingsFile);
+      profile = req.body.profile;
+      res.json(settings());
+    } catch { res.status(500).json({ error: "Nao foi possivel salvar o perfil." }); }
+  });
   const snapshot = (job) => ({ id: job.id, title: job.title, status: job.status, message: job.message,
     percent: job.percent || 0, loaded: job.loaded || 0, total: job.total || 0,
     speedBytesPerSecond: job.speedBytesPerSecond || 0, lastTransferAt: job.lastTransferAt || null,
@@ -116,7 +135,7 @@ async function createHelper({ origin, root, key, engine }) {
         : job.phase === "video" ? engine.getHlsSnapshot(job.current) : null
       : null });
   app.get("/jobs", (req, res) => res.json([...jobs.values()].map(snapshot)));
-  const start = (job) => queue(async () => {
+  const start = (job) => queue(() => withMediaPolicy(() => profiles.find((item) => item.id === profile), async () => {
     try {
       job.status = "processing"; job.message = "Preparando video, audio e legendas no PC."; persist(job);
       job.analyses = [];
@@ -157,6 +176,31 @@ async function createHelper({ origin, root, key, engine }) {
       await fsp.rm(path.join(root, "uploads", job.id), { recursive: true, force: true });
       for (const entry of job.entries) await fsp.rm(path.join(root, "streams", entry.entryId), { recursive: true, force: true });
     } catch (error) { job.status = "error"; job.message = error.message; persist(job); }
+  }));
+  app.post("/jobs/:id/delete", async (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: "Trabalho nao encontrado." });
+    if (job.status !== "error") return res.status(409).json({ error: "Somente trabalhos com erro podem ser apagados." });
+    job.status = "deleting";
+    try {
+      if (!/^[a-f0-9]{32}$/.test(job.id)) throw new Error("Identificador invalido.");
+      const targets = [path.resolve(root, "uploads", job.id)];
+      for (const entry of job.entries || []) {
+        if (!/^(movie|episode)_\d+_[a-z0-9]+$/.test(entry.entryId)) throw new Error("Midia invalida.");
+        targets.push(path.resolve(root, "streams", entry.entryId));
+      }
+      // Validate all resolved targets before deleting any temporary media.
+      const allowed = [path.resolve(root, "uploads") + path.sep, path.resolve(root, "streams") + path.sep];
+      if (targets.some((target) => !allowed.some((prefix) => target.startsWith(prefix)))) throw new Error("Caminho invalido.");
+      for (const target of targets) await fsp.rm(target, { recursive: true, force: true });
+      await fsp.rm(path.join(jobsDir, job.id + ".json"), { force: true });
+      await fsp.rm(path.join(jobsDir, job.id + ".json.tmp"), { force: true });
+      jobs.delete(job.id);
+      res.json({ deleted: true });
+    } catch (error) {
+      job.status = "error"; persist(job);
+      res.status(500).json({ error: "Nao foi possivel apagar: " + error.message });
+    }
   });
   app.post("/jobs/:id/retry", (req, res) => {
     const job = jobs.get(req.params.id);

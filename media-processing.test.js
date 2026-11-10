@@ -4,6 +4,27 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { createSerialQueue, limitFfmpegArgs, threads } = require("./media-processing");
 const exec = promisify(execFile);
+const { localProfiles, withMediaPolicy, getMediaPolicy } = require("./media-processing");
+
+test("local profiles can use all logical CPUs without changing VPS defaults", async () => {
+  const profiles = localProfiles(16);
+  assert.deepEqual(profiles.map((profile) => profile.threads), [2, 8, 12, 16]);
+  assert.equal(localProfiles(1).every((profile) => profile.threads === 1), true);
+  const baseline = getMediaPolicy();
+  const queue = createSerialQueue();
+  let selected = profiles[0];
+  await withMediaPolicy(() => selected, async () => {
+    await queue(() => assert.equal(getMediaPolicy().threads, 2));
+    selected = profiles[3];
+    await queue(() => {
+      const args = limitFfmpegArgs(["-i", "input.mkv", "output.mp4"]);
+      assert.equal(args[args.indexOf("-i") - 1], "16");
+      assert.deepEqual(args.slice(-3), ["-threads", "16", "output.mp4"]);
+      assert.equal(args[args.indexOf("-filter_threads") + 1], "8");
+    });
+  });
+  assert.deepEqual(getMediaPolicy(), baseline);
+});
 
 test("only one task runs and failures do not block the queue", async () => {
   const enqueue = createSerialQueue();

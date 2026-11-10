@@ -16,6 +16,9 @@
 .local-helper-panel a { color: var(--yellow); }
 .local-helper-panel > label { display: grid; gap: 8px; margin: 12px 0; }
 .local-helper-panel input { width: 100%; min-height: 44px; padding: 10px; color: var(--text); background: var(--panel-soft); border: 1px solid var(--panel-border); border-radius: 4px; }
+.local-helper-panel select { width: 100%; min-height: 44px; padding: 10px; color: var(--text); background: var(--panel-soft); border: 1px solid var(--panel-border); border-radius: 4px; }
+.local-job-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.local-job-actions .local-delete-job { color: #ff9b9b; }
 .local-job-list { display: grid; gap: 10px; max-height: 380px; overflow: auto; }
 .local-job-list p { overflow-wrap: anywhere; }
 .local-copy-list { display: grid; gap: 10px; margin-bottom: 10px; }

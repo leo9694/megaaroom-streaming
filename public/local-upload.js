@@ -5,6 +5,7 @@
   let connected = false;
   let lastCompleted = "";
   let pollTimer;
+  let canDelete = false;
   const panel = document.createElement("details");
   panel.className = "processing-options local-helper-panel";
   panel.innerHTML = `<summary>Processamento neste computador</summary>
@@ -12,11 +13,34 @@
     <p><a href="/install-local.ps1" download>Baixar instalador para Windows</a> · <a href="/local-help.html" target="_blank" rel="noopener">Como instalar</a></p>
     <label>Codigo exibido pelo auxiliar<input type="password" class="local-pairing-key" autocomplete="off" /></label>
     <button type="button" class="mini-btn local-connect">Conectar auxiliar</button>
+    <label>Uso de CPU do PC<select class="local-resource-profile" disabled><option>Conecte o auxiliar</option></select></label>
+    <p class="local-resource-message" role="status">Escolha quanto do PC dedicar a conversao. Mais recursos podem deixar outros programas mais lentos.</p>
     <p class="local-helper-message" role="status"></p><div class="local-copy-list"></div><div class="local-job-list"></div>`;
   document.querySelector(".upload-card").append(panel);
   const message = panel.querySelector(".local-helper-message");
   const jobsList = panel.querySelector(".local-job-list");
   const input = panel.querySelector("input");
+  const resourceSelect = panel.querySelector(".local-resource-profile");
+  const resourceMessage = panel.querySelector(".local-resource-message");
+  let savedProfile;
+  const renderSettings = (settings) => {
+    resourceSelect.replaceChildren();
+    for (const profile of settings.profiles) {
+      const option = document.createElement("option"); option.value = profile.id;
+      option.textContent = `${profile.label} · ${profile.threads} thread(s)`;
+      resourceSelect.append(option);
+    }
+    resourceSelect.value = savedProfile = settings.profile;
+    resourceSelect.disabled = false;
+    resourceMessage.textContent = `${settings.cpuCount} processadores logicos detectados. A escolha e salva neste PC e vale a partir da proxima etapa. Maximo pode deixar o PC ocupado; nao e uma porcentagem fixa de CPU.`;
+  };
+  resourceSelect.addEventListener("change", async () => {
+    resourceSelect.disabled = true;
+    try {
+      renderSettings(await request("/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: resourceSelect.value }) }));
+    } catch (error) { resourceSelect.value = savedProfile; resourceMessage.textContent = error.message; }
+    finally { resourceSelect.disabled = false; }
+  });
   const copyList = panel.querySelector(".local-copy-list");
   const jobCards = new Map();
   const transferSamples = new Map();
@@ -77,6 +101,8 @@
     } catch (error) {
       latest = { ...latest, phase: "error" }; paint();
       view.card.querySelector(".local-progress-message").textContent = error.message;
+      const dismiss = document.createElement("button"); dismiss.className = "mini-btn"; dismiss.textContent = "Apagar aviso de falha";
+      dismiss.addEventListener("click", () => view.card.remove()); view.card.append(dismiss);
       throw error;
     } finally {
       window.clearInterval(timer);
@@ -105,6 +131,14 @@
       throw error;
     }
     if (!health.ffmpeg) throw new Error("FFmpeg nao instalado no auxiliar. Execute novamente o instalador para instalar o FFmpeg incluido.");
+    canDelete = health.features?.includes("delete-failed") || false;
+    if (health.features?.includes("resource-profiles")) {
+      try { renderSettings(await request("/settings")); }
+      catch (error) { resourceSelect.disabled = true; resourceMessage.textContent = error.message; }
+    } else {
+      resourceSelect.disabled = true;
+      resourceMessage.textContent = "Atualize o auxiliar pelo instalador para liberar perfis de CPU e apagar falhas. Aguarde o processamento atual terminar antes de fecha-lo.";
+    }
     connected = true; localStorage.setItem("megaaroom-local-key", key);
     say("PC conectado. FFmpeg pronto para processar.");
     poll();
@@ -139,17 +173,34 @@
           speed: stale ? 0 : job.speedBytesPerSecond ?? measuredSpeed,
           active: ["processing", "uploading"].includes(job.status) && !stale, failed: job.status === "error",
           message: stale && uploading ? "Sem novos dados de envio. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
-        const previousRetry = view.card.querySelector("button");
-        if (job.status !== "error") previousRetry?.remove();
-        if (job.status === "error" && !previousRetry) {
+        const previousActions = view.card.querySelector(".local-job-actions");
+        if (job.status !== "error") previousActions?.remove();
+        if (job.status === "error" && !previousActions) {
+          const actions = document.createElement("div"); actions.className = "local-job-actions";
           const retry = document.createElement("button"); retry.className = "mini-btn"; retry.textContent = "Tentar novamente";
+          const remove = document.createElement("button"); remove.className = "mini-btn local-delete-job"; remove.textContent = "Apagar falha";
+          remove.disabled = !canDelete;
+          remove.title = canDelete ? "Remove o trabalho e suas copias temporarias no PC." : "Atualize o auxiliar pelo instalador.";
           retry.addEventListener("click", async () => {
-            retry.disabled = true;
-            try { await request(`/jobs/${job.id}/retry`, { method: "POST" }); }
+            actions.dataset.busy = "true";
+            retry.disabled = remove.disabled = true;
+            try { await request(`/jobs/${job.id}/retry`, { method: "POST" }); poll(); }
             catch (error) { say(error.message); }
-            finally { retry.disabled = false; }
-          }); view.card.append(retry);
+            finally { actions.dataset.busy = "false"; retry.disabled = false; remove.disabled = !canDelete; }
+          });
+          remove.addEventListener("click", async () => {
+            actions.dataset.busy = "true";
+            retry.disabled = remove.disabled = true;
+            try {
+              await request(`/jobs/${job.id}/delete`, { method: "POST" });
+              view.card.remove(); jobCards.delete(job.id); transferSamples.delete(job.id);
+              say("Falha apagada e arquivos temporarios removidos do PC.");
+            } catch (error) { say(error.message); }
+            finally { actions.dataset.busy = "false"; retry.disabled = false; remove.disabled = !canDelete; }
+          });
+          actions.append(retry, remove); view.card.append(actions);
         }
+        if (previousActions) previousActions.querySelector(".local-delete-job").disabled = !canDelete || previousActions.dataset.busy === "true";
       }
       // Update the catalogue without reloading the player.
       const completed = jobs.filter((job) => job.status === "done").map((job) => job.id).join(",");
