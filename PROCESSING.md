@@ -21,6 +21,14 @@ queued FFmpeg jobs and stale progress saves from recreating deleted data.
 
 ## Local PC helper
 
+Helper v5 attaches live machine resources to active /jobs snapshots: aggregate
+CPU busy percentage from deltas in os.cpus().times, total/used physical RAM,
+and selected CPU profile/thread limit. This is whole-machine usage, not per-job
+or FFmpeg attribution. CPU stays null until a sampling interval has elapsed.
+Sampling is cached for one second and triggered only by active-job snapshots;
+the UI reuses its three-second progress poll, with no subprocess or extra timer.
+Finished/queued/error jobs do not retain or display live resource numbers.
+
 For series, the post-upload optimization form offers the selected episode or
 the entire stored season. Season jobs are sorted by numeric episodeNumber
 (1, 2, 3, ..., 10), regardless of catalogue array order. VPS requests register

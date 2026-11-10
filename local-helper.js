@@ -10,6 +10,7 @@ const { Readable } = require("node:stream");
 const { promisify } = require("node:util");
 const execFile = promisify(require("node:child_process").execFile);
 const { parseProcessing } = require("./processing-options");
+const { createResourceMonitor } = require("./resource-monitor");
 if (require.main === module) process.env.MEDIA_THREADS ||= "4";
 const { createSerialQueue, withMediaPolicy, localProfiles } = require("./media-processing");
 
@@ -111,6 +112,7 @@ async function createHelper({ origin, root, key, engine }) {
   const jobsDir = path.join(root, "local-jobs");
   fs.mkdirSync(jobsDir, { recursive: true });
   const profiles = localProfiles();
+  const resourceMonitor = createResourceMonitor();
   const settingsFile = path.join(root, "local-settings.json");
   let profile = "balanced";
   try {
@@ -148,7 +150,7 @@ async function createHelper({ origin, root, key, engine }) {
       return true;
     } catch { return false; }
   };
-  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 4, features: ["resource-profiles", "delete-failed", "optimize-existing", "optimize-season"] }));
+  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 5, features: ["resource-profiles", "delete-failed", "optimize-existing", "optimize-season", "machine-resources"] }));
   app.get("/settings", (req, res) => res.json(settings()));
   app.post("/settings", (req, res) => {
     if (!profiles.some((item) => item.id === req.body?.profile)) return res.status(400).json({ error: "Perfil invalido." });
@@ -162,6 +164,10 @@ async function createHelper({ origin, root, key, engine }) {
   const snapshot = (job) => ({ id: job.id, title: job.title, status: job.status, message: job.message,
     percent: job.percent || 0, loaded: job.loaded || 0, total: job.total || 0,
     speedBytesPerSecond: job.speedBytesPerSecond || 0, lastTransferAt: job.lastTransferAt || null,
+    resources: ["processing", "uploading", "downloading"].includes(job.status) ? {
+      ...resourceMonitor.sample(),
+      profile: { id: profile, label: profiles.find((item) => item.id === profile).label, threads: profiles.find((item) => item.id === profile).threads }
+    } : null,
     processing: job.status === "processing" && job.current
       ? job.phase === "audio" ? engine.getPreparationSnapshot(job.current, job.currentTracks || [], true).find((track) => track.audioIndex === job.audioIndex)
         : job.phase === "video" ? engine.getHlsSnapshot(job.current) : null

@@ -80,10 +80,18 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     let job;
     for (let i = 0; i < 150; i++) {
       [job] = await (await fetch(base + "/jobs", { headers })).json();
+      if (job.status === "processing") {
+        assert.equal(job.resources.scope, "machine");
+        assert.ok(job.resources.memoryUsedBytes <= job.resources.memoryTotalBytes);
+        assert.ok(job.resources.memoryTotalBytes > 0);
+        assert.ok(job.resources.cpuPercent === null || job.resources.cpuPercent >= 0 && job.resources.cpuPercent <= 100);
+        assert.ok(job.resources.profile.threads > 0);
+      }
       if (["done", "error"].includes(job.status)) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     assert.equal(job.status, "done", job.message + "\n" + logs.join(""));
+    assert.equal(job.resources, null, "History must not display current machine consumption as past usage");
     const library = await (await fetch(origin + "/api/library", { headers: credentials })).json();
     assert.equal(library.items.length, 1);
     const entryId = library.items[0].id;

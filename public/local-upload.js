@@ -80,11 +80,13 @@
     const card = document.createElement("article"); card.className = "upload-item local-progress-card";
     card.innerHTML = `<strong></strong><div class="local-progress-heading"><span class="local-phase"></span><b class="local-percent"></b></div>
       <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill"></div></div>
-      <p class="local-transfer-numbers"></p><p class="local-progress-message" role="status"></p>`;
+      <p class="local-transfer-numbers"></p>
+      <div class="local-resource-usage hidden"><span class="local-cpu-usage"></span><span class="local-memory-usage"></span><span class="local-profile-usage"></span><small>Uso total do PC, incluindo outros programas. O perfil indica o limite escolhido, nao o consumo medido.</small></div>
+      <p class="local-resource-hint hidden"></p><p class="local-progress-message" role="status"></p>`;
     card.querySelector("strong").textContent = title;
     const track = card.querySelector(".progress-track");
     const fill = card.querySelector(".progress-fill");
-    return { card, update({ phase, percent = null, loaded = 0, total = 0, speed = 0, message = "", active = false, failed = false }) {
+    return { card, update({ phase, percent = null, loaded = 0, total = 0, speed = 0, message = "", active = false, failed = false, resources = null, resourceHint = false }) {
       const known = Number.isFinite(percent);
       card.dataset.active = String(active);
       card.dataset.failed = String(failed);
@@ -97,6 +99,15 @@
       card.querySelector(".local-transfer-numbers").textContent = total || loaded
         ? `${bytes(loaded)} / ${total ? bytes(total) : "tamanho desconhecido"} · ${speed > 0 ? bytes(speed) + "/s" : "Aguardando dados"}` : "";
       card.querySelector(".local-progress-message").textContent = message;
+      card.querySelector(".local-resource-usage").classList.toggle("hidden", !resources);
+      const hint = card.querySelector(".local-resource-hint");
+      hint.classList.toggle("hidden", !resourceHint);
+      hint.textContent = resourceHint ? "Atualize e reabra o auxiliar v5 para mostrar o uso de CPU e RAM neste cartao." : "";
+      if (resources) {
+        card.querySelector(".local-cpu-usage").textContent = `CPU do PC: ${Number.isFinite(resources.cpuPercent) ? resources.cpuPercent.toFixed(1) + "%" : "medindo..."}`;
+        card.querySelector(".local-memory-usage").textContent = `RAM do PC: ${bytes(resources.memoryUsedBytes)} / ${bytes(resources.memoryTotalBytes)}${Number.isFinite(resources.memoryPercent) ? " (" + resources.memoryPercent.toFixed(1) + "%)" : ""}`;
+        card.querySelector(".local-profile-usage").textContent = `Perfil selecionado: ${resources.profile.label} · ${resources.profile.threads} thread(s)`;
+      }
     } };
   }
   async function copyFiles(body, title) {
@@ -209,6 +220,8 @@
           percent: transferring || job.status === "done" ? job.percent : processing ? job.processing.percent : null,
           loaded: transferring ? job.loaded : 0, total: transferring ? job.total : 0,
           speed: stale ? 0 : job.speedBytesPerSecond ?? measuredSpeed,
+          resources: job.resources,
+          resourceHint: ["processing", "uploading", "downloading"].includes(job.status) && job.resources === undefined,
           active: ["processing", "uploading", "downloading"].includes(job.status) && !stale, failed: job.status === "error",
           message: stale && transferring ? "Sem novos dados de transferencia. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
         const previousActions = view.card.querySelector(".local-job-actions");
@@ -251,6 +264,7 @@
         if (view.card.dataset.active !== "true") continue;
         view.card.dataset.active = "false";
         view.card.querySelector(".progress-fill").classList.remove("is-indeterminate");
+        view.card.querySelector(".local-resource-usage").classList.add("hidden");
         view.card.querySelector(".local-progress-message").textContent = "Sem conexao com o auxiliar. Reconecte para confirmar o progresso.";
       }
     }
