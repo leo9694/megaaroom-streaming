@@ -467,10 +467,13 @@ window.addEventListener("popstate", () => {
   syncRoute();
 });
 
-function syncProcessingOptions(form) {
-  const enabled = form.elements.processVideo.checked;
+function syncProcessingOptions(form, changedInput) {
   const choices = [...form.querySelectorAll('[name="quality"]')];
-  form.querySelector(".processing-qualities").disabled = !enabled;
+  if (changedInput?.name === "quality") {
+    form.elements.processVideo.checked = choices.some((choice) => choice.checked);
+  }
+  const enabled = form.elements.processVideo.checked;
+  form.querySelector(".processing-qualities").disabled = false;
   choices[0].setCustomValidity(enabled && !choices.some((choice) => choice.checked)
     ? "Selecione ao menos uma qualidade." : "");
 }
@@ -483,7 +486,7 @@ function appendProcessingOptions(formData, form) {
 }
 
 for (const form of [movieForm, seriesForm]) {
-  form.addEventListener("change", () => syncProcessingOptions(form));
+  form.addEventListener("change", (event) => syncProcessingOptions(form, event.target));
   form.addEventListener("reset", () => queueMicrotask(() => syncProcessingOptions(form)));
   syncProcessingOptions(form);
 }
@@ -611,17 +614,7 @@ function refreshVisibleLibraryParts() {
     return;
   }
 
-  const optimizeEntry = item.type === "series"
-    ? item.episodes.find((episode) => episode.id === state.currentEpisodeId) : item;
-  optimizeForm.dataset.entryId = optimizeEntry?.id || "";
-  optimizeForm.querySelector('[type="submit"]').disabled = !optimizeEntry || pendingOptimizations.has(optimizeEntry.id);
-  document.getElementById("optimizeTarget").textContent = item.type === "series"
-    ? `Otimizar episodio ${optimizeEntry?.episodeNumber || ""}` : "Otimizar este filme";
-  optimizeMessage.textContent = "";
-  const processing = optimizeEntry?.processing || item.processing;
-  for (const choice of optimizeForm.querySelectorAll('[name="quality"]')) {
-    choice.checked = !processing?.enabled || processing.qualities.includes(Number(choice.value));
-  }
+  updateOptimizationTarget(item);
   renderRelated(item);
 }
 
@@ -788,6 +781,19 @@ function buildPosterCardMarkup(item) {
 const optimizeForm = document.getElementById("optimizeForm");
 const optimizeMessage = document.getElementById("optimizeMessage");
 const pendingOptimizations = new Set();
+function updateOptimizationTarget(item) {
+  const entry = item.type === "series"
+    ? item.episodes.find((episode) => episode.id === state.currentEpisodeId) : item;
+  const entryId = entry?.id || "";
+  if (optimizeForm.dataset.entryId !== entryId) {
+    for (const choice of optimizeForm.querySelectorAll('[name="quality"]')) choice.checked = false;
+    optimizeMessage.textContent = "Selecione as qualidades que deseja gerar.";
+  }
+  optimizeForm.dataset.entryId = entryId;
+  optimizeForm.querySelector('[type="submit"]').disabled = !entry || pendingOptimizations.has(entryId);
+  document.getElementById("optimizeTarget").textContent = item.type === "series"
+    ? `Otimizar episodio ${entry?.episodeNumber || ""}` : "Otimizar este filme";
+}
 optimizeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const item = state.library.find((media) => media.id === state.currentMediaId);
@@ -883,6 +889,7 @@ function renderDetail(item) {
     }
   }
 
+  updateOptimizationTarget(item);
   renderRelated(item);
   updateEpisodeMarks();
 }
