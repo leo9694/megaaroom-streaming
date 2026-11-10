@@ -3,6 +3,39 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+test("new episode validation happens before sending files and preserves selection on rejection", async () => {
+  const source = fs.readFileSync(require.resolve("./public/app.js"), "utf8");
+  const files = [new Blob(["episode3"]), new Blob(["episode4"])];
+  const message = {};
+  const button = {};
+  let handler;
+  const form = { elements: { episodes: { files, value: "selected" }, targetSeriesId: { value: "season" },
+    startEpisodeNumber: { value: "3" }, title: { value: "VisionQuest" } }, querySelector: () => button,
+    addEventListener(event, fn) { handler = fn; } };
+  const sent = [];
+  const preflights = [];
+  let valid = false;
+  const context = vm.createContext({ addEpisodesForm: form, FormData,
+    document: { getElementById: () => message }, appendProcessingOptions() {},
+    startTrackedUpload(upload) { sent.push(upload); },
+    async fetch(url, options) { preflights.push(JSON.parse(options.body)); return { ok: valid, json: async () => valid ? { valid: true } : { error: "O episodio ja existe." } }; }
+  });
+  const start = source.indexOf('addEpisodesForm.addEventListener("submit"');
+  vm.runInContext(source.slice(start, source.indexOf("function updateAddEpisodesTarget(", start)), context);
+  const event = { preventDefault() {}, currentTarget: form };
+  await handler(event);
+  assert.equal(sent.length, 0);
+  assert.equal(form.elements.episodes.value, "selected");
+  assert.match(message.textContent, /ja existe/);
+  valid = true;
+  await handler(event);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].formData.getAll("episodes").length, 2);
+  assert.equal(sent[0].formData.get("startEpisodeNumber"), "3");
+  assert.deepEqual(preflights[0], { count: 2, startEpisodeNumber: 3 });
+  assert.equal(button.disabled, false);
+});
+
 test("new episode upload progress is visible inside its season and updates failures", () => {
   const source = fs.readFileSync(require.resolve("./public/app.js"), "utf8");
   const current = { mediaId: "seasonA", title: "Novos episodios A", kind: "series", percent: 40,

@@ -576,20 +576,39 @@ seriesForm.addEventListener("submit", (event) => {
   setStatus("Upload da temporada iniciado.");
 });
 
-addEpisodesForm.addEventListener("submit", (event) => {
+addEpisodesForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const files = [...form.elements.episodes.files];
   if (!files.length || !form.elements.targetSeriesId.value) return;
+  const start = Number(form.elements.startEpisodeNumber.value);
+  const mediaId = form.elements.targetSeriesId.value;
+  const title = form.elements.title.value;
+  const message = document.getElementById("addEpisodesMessage");
+  if (!Number.isInteger(start) || start < 1 || files.length > 100 || start + files.length > 100001) {
+    message.textContent = "Informe um primeiro episodio inteiro valido e selecione ate 100 arquivos.";
+    return;
+  }
   const data = new FormData();
   appendProcessingOptions(data, form);
-  data.append("startEpisodeNumber", form.elements.startEpisodeNumber.value);
+  data.append("startEpisodeNumber", String(start));
   files.forEach((file) => data.append("episodes", file));
-  startTrackedUpload({ kind: "series", title: `${form.elements.title.value} - novos episodios`, subtitle: `${files.length} episodio(s)`,
-    mediaId: form.elements.targetSeriesId.value,
-    url: `/api/series/${encodeURIComponent(form.elements.targetSeriesId.value)}/episodes`, formData: data });
-  form.elements.episodes.value = "";
-  document.getElementById("addEpisodesMessage").textContent = "Envio iniciado. Os novos episodios aparecerao na lista ao concluir.";
+  const button = form.querySelector('[type="submit"]');
+  button.disabled = true;
+  message.textContent = "Verificando a temporada antes de enviar os arquivos...";
+  try {
+    const validation = await fetch(`/api/series/${encodeURIComponent(mediaId)}/episodes/validate`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: files.length, startEpisodeNumber: start })
+    });
+    const result = await validation.json().catch(() => ({ error: "Atualize e reinicie o servidor para validar os novos episodios." }));
+    if (!validation.ok || !result.valid) { message.textContent = result.error || "Nao foi possivel validar o envio."; return; }
+    startTrackedUpload({ kind: "series", title: `${title} - novos episodios`, subtitle: `${files.length} episodio(s)`,
+      mediaId,
+      url: `/api/series/${encodeURIComponent(mediaId)}/episodes`, formData: data });
+    form.elements.episodes.value = "";
+    message.textContent = "Envio iniciado. Os novos episodios aparecerao na lista ao concluir.";
+  } catch { message.textContent = "Nao foi possivel verificar a temporada. Nenhum arquivo foi enviado. Tente novamente."; }
+  finally { button.disabled = false; }
 });
 
 function updateAddEpisodesTarget(item) {

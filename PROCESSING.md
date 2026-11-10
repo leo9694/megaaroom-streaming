@@ -25,8 +25,13 @@ Series details include an add-episodes form targeting the same stored season.
 Files are naturally sorted by filename, then numbered from an explicit first
 episode (default: highest existing number + 1). Overlapping numbers reject the
 whole batch; existing IDs, metadata, watch progress and media are retained.
-Direct VPS uploads can skip video optimization or process selected qualities;
-local prepared uploads carry a targetSeriesId in the upload ticket and append
+Direct VPS uploads can skip video optimization or process selected qualities.
+The append form validates count/start/collisions through a small JSON request
+before creating the multipart upload. Async season lookup runs before attaching
+the upload byte tracker: attaching a data listener first puts the request in
+flowing mode and can discard the initial multipart fields while lookup awaits
+disk I/O. Regression coverage sends two files with the real uploadId query.
+Local prepared uploads carry a targetSeriesId in the upload ticket and append
 only after validated artifacts arrive. Receiver-side append is serialized with
 other catalogue writes, including a second conflict check on completion.
 Each episode saves its own processing options. Additional upload folders are

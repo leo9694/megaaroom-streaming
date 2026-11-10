@@ -1491,7 +1491,15 @@ app.post(
   }
 );
 
-app.post("/api/series/:id/episodes", createUploadTracker,
+app.post("/api/series/:id/episodes/validate", async (req, res) => {
+  try {
+    const season = (await readLibrary()).items.find((entry) => entry.id === req.params.id);
+    validateNewEpisodes(season, req.body.count, req.body.startEpisodeNumber);
+    res.json({ valid: true });
+  } catch (error) { res.status(409).json({ error: error.message }); }
+});
+
+app.post("/api/series/:id/episodes",
   async (req, res, next) => {
     try {
       const season = (await readLibrary()).items.find((item) => item.id === req.params.id && item.type === "series" && !item.deletionPending);
@@ -1501,7 +1509,7 @@ app.post("/api/series/:id/episodes", createUploadTracker,
       res.once("close", () => activeEpisodeUploads.delete(req));
       next();
     } catch (error) { next(error); }
-  }, upload.array("episodes", 100), async (req, res) => {
+  }, createUploadTracker, upload.array("episodes", 100), async (req, res) => {
     let committed = false;
     try {
       const files = [...(req.files || [])].sort((a, b) => a.originalname.localeCompare(b.originalname, undefined, { numeric: true, sensitivity: "base" }));
