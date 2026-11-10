@@ -18,9 +18,9 @@ test("saved settings control renditions and disabled mode only copies video", as
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "megaaroom-options-"));
   try {
     const source = await fs.readFile(path.join(__dirname, "server.js"), "utf8");
-    const context = vm.createContext({ require, __dirname: folder, console, process, Buffer, setTimeout, clearTimeout });
+    const context = vm.createContext({ require, module: { exports: {} }, __dirname: folder, console, process, Buffer, setTimeout, clearTimeout });
     // Exercise server functions with isolated data and no listening HTTP server.
-    vm.runInContext(source.slice(0, source.lastIndexOf("app.listen(PORT")), context);
+    vm.runInContext(source.slice(0, source.lastIndexOf("if (require.main")), context);
     const api = vm.runInContext(`({ buildMovieItem, buildSeriesItem, findEntryById,
       getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary, getPreparationSnapshot })`, context);
     const disabled = { enabled: false, qualities: [] };

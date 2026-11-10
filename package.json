@@ -4,7 +4,8 @@
   "description": "Sistema pessoal de streaming para filmes e series",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "local-helper": "node local-helper.js"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -12,7 +12,7 @@ const hlsJsPath = require.resolve("hls.js/dist/hls.min.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ROOT = __dirname;
+const ROOT = process.env.MEGAROOM_MEDIA_ROOT || __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const UPLOADS_DIR = path.join(ROOT, "uploads");
 const STREAMS_DIR = path.join(ROOT, "streams");
@@ -21,6 +21,12 @@ const progressStore = require('./progress-store')(path.join(DATA_DIR, 'progress.
 const APP_USERNAME = process.env.APP_USERNAME || "";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const accessProtectionEnabled = Boolean(APP_USERNAME && APP_PASSWORD);
+const localImport = require("./local-import").createLocalImport({
+  root: ROOT, buildMovieItem: (...args) => buildMovieItem(...args),
+  buildSeriesItem: (...args) => buildSeriesItem(...args),
+  readLibrary: (...args) => readLibrary(...args),
+  updateLibrary: (...args) => updateLibrary(...args)
+});
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -100,6 +106,7 @@ const coverStorage = multer.diskStorage({
 const coverUpload = multer({ storage: coverStorage });
 
 app.use(express.json({ limit: "2mb" }));
+app.use("/api/local-import/transfer", localImport.transfer);
 app.use((req, res, next) => {
   if (!accessProtectionEnabled) {
     next();
@@ -148,6 +155,7 @@ app.use("/streams", express.static(STREAMS_DIR, {
   }
 }));
 app.use(express.static(path.join(ROOT, "public")));
+app.post("/api/local-import/ticket", localImport.ticket);
 
 async function readLibrary() {
   const raw = await fsp.readFile(LIBRARY_FILE, "utf8");
@@ -446,6 +454,8 @@ function parseTimestampToSeconds(value) {
 async function analyzePlayback(entry) {
   const sourcePath = srcToAbsolutePath(entry.sourceSrc);
   const cacheKey = `${entry.entryId}:${sourcePath}`;
+  const imported = (entry.episode || entry.parent).localAnalysis;
+  if (imported) return { ...imported, sourcePath };
   const cached = analysisCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -507,7 +517,8 @@ function getAudioTrackKey(track) {
 function getPreparedVariantPath(entryId, track, original = false) {
   const trackKey = getAudioTrackKey(track);
   const folder = path.join(STREAMS_DIR, entryId);
-  const fileName = `${original ? "original-" : ""}audio-${trackKey}.mp4`;
+  const originalName = `original-audio-${trackKey}.mp4`;
+  const fileName = original || fs.existsSync(path.join(folder, originalName)) ? originalName : `audio-${trackKey}.mp4`;
   const filePath = path.join(folder, fileName);
   return {
     folder,
@@ -1465,9 +1476,16 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(ROOT, "public", "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
-  if (!accessProtectionEnabled) {
-    console.warn("[SEGURANCA] APP_USERNAME/APP_PASSWORD nao definidos; catalogo e videos estao sem autenticacao no Express.");
-  }
-});
+module.exports = { app, analyzePlayback, prepareHls, prepareVariant, prepareSubtitle, getHlsSnapshot,
+  getPreparationSnapshot, getSubtitleSnapshot, buildMovieItem, buildSeriesItem, findEntryById };
+
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`Servidor rodando em http://localhost:${PORT}`);
+    if (!accessProtectionEnabled) {
+      console.warn("[SEGURANCA] APP_USERNAME/APP_PASSWORD nao definidos; catalogo e videos estao sem autenticacao no Express.");
+    }
+  });
+  // Multi-GB uploads may legitimately take longer than Node's default timeout.
+  server.requestTimeout = 0;
+}
