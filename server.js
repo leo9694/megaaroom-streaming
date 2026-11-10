@@ -3,6 +3,7 @@ const { parseProcessing, entryProcessing } = require("./processing-options");
 const { orderedEpisodes } = require("./episode-order");
 const { cleanupMediaFiles, mediaIds } = require("./media-cleanup");
 const { validateNewEpisodes, appendEpisodes } = require("./season-episodes");
+const { createUploadCleanup, finishUpload } = require("./upload-cleanup");
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -93,6 +94,8 @@ const uploadStorage = multer.diskStorage({
 });
 
 const upload = multer({ storage: uploadStorage });
+const cleanUpload = createUploadCleanup({ root: ROOT,
+  readLibrary: (...args) => readLibrary(...args), removeDirectory: (...args) => removeDirectoryIfExists(...args) });
 
 const coverStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -729,6 +732,8 @@ async function prepareHls(entry, analysis) {
     qualities: renditions.map((item) => item.height)
   });
 
+  const publishedPaths = [];
+  let published = false;
   const job = (async () => {
     const startedAt = Date.now();
     const tempHls = getHlsPaths(entry.entryId, true);
@@ -812,13 +817,18 @@ async function prepareHls(entry, analysis) {
       if (dir.name === "audio") {
         fs.mkdirSync(path.join(finalHls.folder, "audio"), { recursive: true });
         for (const track of await fsp.readdir(path.join(tempHls.folder, "audio"))) {
-          await fsp.rename(path.join(tempHls.folder, "audio", track), path.join(finalHls.folder, "audio", track));
+          const destination = path.join(finalHls.folder, "audio", track);
+          await fsp.rename(path.join(tempHls.folder, "audio", track), destination);
+          publishedPaths.push(destination);
         }
       } else {
-        await fsp.rename(path.join(tempHls.folder, dir.name), path.join(finalHls.folder, dir.name));
+        const destination = path.join(finalHls.folder, dir.name);
+        await fsp.rename(path.join(tempHls.folder, dir.name), destination);
+        publishedPaths.push(destination);
       }
     }
     await fsp.rename(tempHls.masterPath, finalHls.masterPath);
+    published = true;
     await removeDirectoryIfExists(tempHls.folder);
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     hlsStatus.set(entry.entryId, {
@@ -839,6 +849,8 @@ async function prepareHls(entry, analysis) {
       qualities: []
     });
     console.error(`[HLS] erro id=${entry.entryId}: ${summarizeProcessError(error)}`);
+    // Roll back only this attempt, never tracks used by the previous master.
+    if (!published) for (const folder of publishedPaths) await removeDirectoryIfExists(folder);
     await removeDirectoryIfExists(getHlsPaths(entry.entryId, true).folder);
     throw error;
   }).finally(async () => {
@@ -1018,9 +1030,9 @@ async function prepareVariant(entry, analysis, audioIndex, original = false) {
     return prepareJobs.get(jobKey);
   }
 
+  const tempPath = `${variant.filePath}.tmp.mp4`;
   const job = (async () => {
     fs.mkdirSync(variant.folder, { recursive: true });
-    const tempPath = `${variant.filePath}.tmp.mp4`;
     if (fs.existsSync(tempPath)) {
       fs.rmSync(tempPath, { force: true });
     }
@@ -1107,7 +1119,13 @@ async function prepareVariant(entry, analysis, audioIndex, original = false) {
       audioIndex
     });
     return variant;
-  })().finally(async () => {
+  })().catch(async (error) => {
+    await fsp.rm(tempPath, { force: true });
+    prepareStatus.set(jobKey, {
+      status: "error", percent: 0, message: "Falha ao preparar audio e video.", audioIndex
+    });
+    throw error;
+  }).finally(async () => {
     prepareJobs.delete(jobKey);
     if (deletingEntries.has(entry.entryId)) await removeDirectoryIfExists(path.join(STREAMS_DIR, entry.entryId));
   });
@@ -1435,8 +1453,8 @@ app.get("/api/playback/:entryId", async (req, res) => {
 app.post(
   "/api/upload/movie",
   createUploadTracker,
-  upload.fields([{ name: "video", maxCount: 1 }, { name: "cover", maxCount: 1 }]),
-  async (req, res) => {
+  cleanUpload(upload.fields([{ name: "video", maxCount: 1 }, { name: "cover", maxCount: 1 }])),
+  finishUpload(async (req, res) => {
     const file = req.files?.video?.[0];
     const coverFile = req.files?.cover?.[0] || null;
 
@@ -1452,17 +1470,17 @@ app.post(
     await updateLibrary((library) => {
       library.items.unshift(item);
     });
-
+    req.uploadCommitted = true;
     enqueuePreparationForEntry(item.id).catch(() => {});
     res.status(201).json({ item });
-  }
+  })
 );
 
 app.post(
   "/api/upload/series",
   createUploadTracker,
-  upload.fields([{ name: "episodes", maxCount: 100 }, { name: "cover", maxCount: 1 }]),
-  async (req, res) => {
+  cleanUpload(upload.fields([{ name: "episodes", maxCount: 100 }, { name: "cover", maxCount: 1 }])),
+  finishUpload(async (req, res) => {
     const files = (req.files?.episodes || []).slice().sort((a, b) =>
       a.originalname.localeCompare(b.originalname, undefined, { numeric: true, sensitivity: "base" })
     );
@@ -1470,7 +1488,6 @@ app.post(
     const { title, genre, year, synopsis, seasonNumber } = req.body;
 
     if (!title || files.length === 0) {
-      await removeDirectoryIfExists(path.join(UPLOADS_DIR, req.uploadFolderName || ""));
       return res.status(400).json({ error: "Informe o título da série e envie pelo menos um episódio." });
     }
 
@@ -1482,13 +1499,13 @@ app.post(
     await updateLibrary((library) => {
       library.items.unshift(item);
     });
-
+    req.uploadCommitted = true;
     for (const episode of item.episodes) {
       enqueuePreparationForEntry(episode.id).catch(() => {});
     }
 
     res.status(201).json({ item });
-  }
+  })
 );
 
 app.post("/api/series/:id/episodes/validate", async (req, res) => {
@@ -1509,8 +1526,7 @@ app.post("/api/series/:id/episodes",
       res.once("close", () => activeEpisodeUploads.delete(req));
       next();
     } catch (error) { next(error); }
-  }, createUploadTracker, upload.array("episodes", 100), async (req, res) => {
-    let committed = false;
+  }, createUploadTracker, cleanUpload(upload.array("episodes", 100)), finishUpload(async (req, res) => {
     try {
       const files = [...(req.files || [])].sort((a, b) => a.originalname.localeCompare(b.originalname, undefined, { numeric: true, sensitivity: "base" }));
       const processing = parseProcessing(req.body.processing);
@@ -1524,14 +1540,15 @@ app.post("/api/series/:id/episodes",
         added = appendEpisodes(season, batch.episodes.map((episode) => ({ ...episode, processing })), start, req.uploadFolderName);
         return season;
       });
-      committed = true;
+      req.uploadCommitted = true;
       for (const episode of added) enqueuePreparationForEntry(episode.id).catch(() => {});
       res.status(201).json({ item, addedEpisodes: added.map((episode) => episode.id) });
     } catch (error) {
-      if (!committed && req.uploadFolderName) await removeDirectoryIfExists(path.join(UPLOADS_DIR, req.uploadFolderName));
+      req.uploadHandling = false;
+      await req.cleanupUpload();
       res.status(409).json({ error: error.message });
     }
-  });
+  }));
 
 app.post("/api/media/:id/cover", (req, res, next) => {
   coverUpload.single("cover")(req, res, (error) => {

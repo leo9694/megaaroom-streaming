@@ -170,3 +170,18 @@ processes. These changes do not delete or automatically reconvert ready media.
 Validate locally with: node --test media-processing.test.js progress-store.test.js
 Real movie conversion time depends on source resolution, duration and VPS CPU;
 the synthetic smoke test is not a production benchmark.
+
+Storage cleanup: rejected or interrupted ordinary uploads remove their own
+uncommitted upload folder, never a folder referenced by the catalogue. Parser
+errors and catalogue-write failures follow the same cleanup path. A disconnected
+client cannot delete files while a catalogue commit is in progress. Failed MP4
+preparation removes its partial output; failed HLS publication rolls back only
+new tracks from that attempt and preserves previously published streams.
+Deleting a movie or season removes originals, covers, all episode batches,
+prepared audio, subtitles, HLS, local-import tickets and watch progress. If files
+cannot be removed, deletion reports an error and keeps the catalogue record for
+retry. Shared originals referenced by another item are preserved. This does not
+scan or purge historical orphan folders, or guarantee cleanup after an abrupt
+process/host crash. Keep originals needed for Original playback and later
+optimization. Failed helper jobs on the PC intentionally retain retry files
+until the user selects Delete failure; these are distinct from VPS temporaries.

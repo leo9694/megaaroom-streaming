@@ -18,7 +18,9 @@ test("saved settings control renditions and disabled mode only copies video", as
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "megaaroom-options-"));
   try {
     const source = await fs.readFile(path.join(__dirname, "server.js"), "utf8");
-    const context = vm.createContext({ require, module: { exports: {} }, __dirname: folder, console, process, Buffer, setTimeout, clearTimeout });
+    const fileOps = { ...fs };
+    const isolatedRequire = Object.assign((name) => name === "fs/promises" ? fileOps : require(name), { resolve: require.resolve });
+    const context = vm.createContext({ require: isolatedRequire, module: { exports: {} }, __dirname: folder, console, process, Buffer, setTimeout, clearTimeout });
     // Exercise server functions with isolated data and no listening HTTP server.
     vm.runInContext(source.slice(0, source.lastIndexOf("if (require.main")), context);
     const api = vm.runInContext(`({ buildMovieItem, buildSeriesItem, findEntryById,
@@ -53,9 +55,12 @@ test("saved settings control renditions and disabled mode only copies video", as
     assert.equal(calls.length, 1);
 
     const other = { ...entry, entryId: "copy-failure" };
-    context.capture = async () => { throw new Error("cannot remux"); };
+    context.capture = async (args) => { await fs.writeFile(args.at(-1), "partial output"); throw new Error("cannot remux"); };
     vm.runInContext("runFfmpeg = capture", context);
     await assert.rejects(api.prepareVariant(other, analysis, 0), /processamento ativado/);
+    assert.deepEqual(await fs.readdir(path.join(folder, "streams", other.entryId)), []);
+    assert.equal(api.getPreparationSnapshot(other.entryId, analysis.audioTracks)[0].status, "error");
+    assert.equal(api.getPreparationSnapshot(entry.entryId, analysis.audioTracks)[0].status, "ready");
 
     context.capture = async (args) => { calls.push(args); await fs.writeFile(args.at(-1), "fixture"); };
     vm.runInContext("runFfmpeg = capture; ensureHlsDiskSpace = async () => {}", context);
@@ -64,8 +69,23 @@ test("saved settings control renditions and disabled mode only copies video", as
     assert.deepEqual(Array.from(api.readHlsQualities(api.getHlsPaths(entry.entryId).masterPath)), [720]);
     const beforeUpgrade = calls.length;
     entry.parent.processing.qualities.push(480);
+    const finalHls = api.getHlsPaths(entry.entryId);
+    const masterBeforeFailure = await fs.readFile(finalHls.masterPath, "utf8");
+    fileOps.rename = async (source, destination) => {
+      if (destination === finalHls.masterPath) throw new Error("Simulated master publication failure");
+      return fs.rename(source, destination);
+    };
+    await assert.rejects(api.prepareHls(entry, { ...analysis,
+      audioTracks: [...analysis.audioTracks, { index: 1, ffmpegStreamIndex: 2, language: "pt" }] }));
+    assert.equal(await fs.readFile(finalHls.masterPath, "utf8"), masterBeforeFailure);
+    assert.equal((await fs.stat(path.join(finalHls.folder, "720p", "index.m3u8"))).isFile(), true);
+    await assert.rejects(fs.stat(path.join(finalHls.folder, "480p")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(api.getHlsPaths(entry.entryId, true).folder), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(finalHls.folder, "audio", "stream-2")), { code: "ENOENT" });
+    fileOps.rename = fs.rename;
+    const failedUpgradeCalls = calls.length - beforeUpgrade;
     await api.prepareHls(entry, analysis);
-    assert.equal(calls.length, beforeUpgrade + 1, "Only missing video quality should be encoded");
+    assert.equal(calls.length, beforeUpgrade + failedUpgradeCalls + 1, "Only missing video quality should be encoded");
     assert.deepEqual(Array.from(api.readHlsQualities(api.getHlsPaths(entry.entryId).masterPath)), [720, 480]);
 
     await api.updateLibrary((stored) => { stored.items = library.items; });
@@ -130,6 +150,20 @@ test("saved settings control renditions and disabled mode only copies video", as
       assert.equal(appendedPair.status, 201, pairedText);
       const pairedItem = JSON.parse(pairedText).item;
       assert.deepEqual(pairedItem.episodes.map((episode) => episode.episodeNumber), [1, 2, 3, 4, 10]);
+      const uploadFoldersBefore = await fs.readdir(path.join(folder, "uploads"));
+      const invalidMovie = new FormData();
+      invalidMovie.append("processing", JSON.stringify({ enabled: true, qualities: [] }));
+      invalidMovie.append("video", new Blob(["rejected movie"]), "movie.mkv");
+      assert.equal((await fetch(`http://127.0.0.1:${listener.address().port}/api/upload/movie`, { method: "POST", body: invalidMovie })).status, 400);
+      const emptySeason = new FormData();
+      emptySeason.append("title", "No files");
+      assert.equal((await fetch(`http://127.0.0.1:${listener.address().port}/api/upload/series`, { method: "POST", body: emptySeason })).status, 400);
+      // Responses may reach the client just before the handler's cleanup completes.
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if ((await fs.readdir(path.join(folder, "uploads"))).length === uploadFoldersBefore.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.deepEqual(await fs.readdir(path.join(folder, "uploads")), uploadFoldersBefore, "Failed upload is removed without touching existing movies or episodes");
       vm.runInContext("removeDirectoryIfExists = async () => false", context);
       const deletionUrl = `http://127.0.0.1:${listener.address().port}/api/media/${series.id}`;
       assert.equal((await fetch(deletionUrl, { method: "DELETE" })).status, 409);
