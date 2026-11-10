@@ -158,7 +158,7 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
       res.status(400).json({ error: "Envio local incompleto: " + error.message });
     } finally { active.delete(id); }
   });
-  return { ticket, transfer };
+  return { ticket, transfer, isTransferring: (id) => active.has(id) };
 }
 
 module.exports = { createLocalImport, artifactPath, verifyPlaylists, validateAnalysis };

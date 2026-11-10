@@ -115,6 +115,15 @@ test("saved settings control renditions and disabled mode only copies video", as
       const batch = await batchResponse.json();
       assert.deepEqual(batch.queued, ["episode_123_test1", "episode_123_test2", "episode_123_test10"]);
       assert.deepEqual(Array.from(context.batchOrder), batch.queued);
+      vm.runInContext("removeDirectoryIfExists = async () => false", context);
+      const deletionUrl = `http://127.0.0.1:${listener.address().port}/api/media/${series.id}`;
+      assert.equal((await fetch(deletionUrl, { method: "DELETE" })).status, 409);
+      const retained = JSON.parse(await fs.readFile(path.join(folder, "data", "library.json"), "utf8"));
+      assert.equal(retained.items.find((item) => item.id === series.id).deletionPending, true);
+      vm.runInContext("removeDirectoryIfExists = async (folder) => { await fsp.rm(folder, { recursive: true, force: true }); return true; }", context);
+      assert.equal((await fetch(deletionUrl, { method: "DELETE" })).status, 204);
+      const deleted = JSON.parse(await fs.readFile(path.join(folder, "data", "library.json"), "utf8"));
+      assert.equal(deleted.items.some((item) => item.id === series.id), false);
     } finally {
       listener.closeAllConnections();
       await new Promise((resolve) => listener.close(resolve));

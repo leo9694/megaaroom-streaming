@@ -202,6 +202,21 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const completedSeason = await (await fetch(origin + `/api/series/${season.id}/local-tickets`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [720] }) })).json();
     assert.equal(completedSeason.ready, true);
     assert.deepEqual(completedSeason.tickets, []);
+    for (const episode of season.episodes) {
+      await fetch(origin + `/api/progress/${episode.id}`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ position: 0.5, duration: 2 }) });
+    }
+    const deletion = await fetch(origin + `/api/media/${season.id}`, { method: "DELETE", headers: credentials });
+    assert.equal(deletion.status, 204, await deletion.text());
+    await assert.rejects(fs.stat(path.join(remote, "uploads", season.folder)), { code: "ENOENT" });
+    for (const episode of season.episodes) await assert.rejects(fs.stat(path.join(remote, "streams", episode.id)), { code: "ENOENT" });
+    const afterDeletion = await (await fetch(origin + "/api/library", { headers: credentials })).json();
+    assert.equal(afterDeletion.items.length, 2);
+    assert.equal(afterDeletion.items.some((item) => item.id === season.id), false);
+    const remainingProgress = await (await fetch(origin + "/api/progress", { headers: credentials })).json();
+    for (const episode of season.episodes) assert.equal(remainingProgress[episode.id], undefined);
+    const oldTicket = seasonBatch.tickets[0];
+    assert.equal((await fetch(origin + `/api/local-import/transfer/existing/${oldTicket.id}/source`, { headers: { "X-Import-Token": oldTicket.token } })).status, 404);
+    assert.equal((await fetch(origin + original.source, { method: "HEAD", headers: credentials })).status, 200, "Unrelated original must remain playable");
     assert.ok(!logs.some((line) => line.includes("[HLS] inicio")), "VPS must not encode existing local jobs either");
     assert.equal((await fs.readdir(path.join(pc, "uploads"))).length, 0, "Completed local input must be cleaned");
   } finally {

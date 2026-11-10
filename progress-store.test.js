@@ -22,5 +22,9 @@ test('progress survives restart, concurrent saves and watched/pause races', asyn
     await assert.rejects(store.save('episode2', { position: -1, duration: 100 }));
     await store.save('episode2', { position: 35, duration: 100 });
     assert.equal((await store.all()).episode2.position, 35);
+    await store.remove(['episode1']);
+    assert.equal((await store.all()).episode1, undefined);
+    assert.equal((await store.all()).episode2.position, 35);
+    await assert.rejects(store.save('episode1', { position: 5, duration: 100 }));
   } finally { await fs.rm(folder, { recursive: true, force: true }); }
 });

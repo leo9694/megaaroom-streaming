@@ -22,6 +22,9 @@
 .local-job-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .local-job-actions .local-delete-job { color: #ff9b9b; }
 .local-job-list { display: grid; gap: 10px; max-height: 380px; overflow: auto; }
+.local-job-history { display: grid; gap: 10px; max-height: 380px; overflow: auto; margin-top: 12px; }
+.local-activity-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 12px 0; }
+.local-history-toggle { min-height: 40px; }
 .local-job-list p { overflow-wrap: anywhere; }
 .local-copy-list { display: grid; gap: 10px; margin-bottom: 10px; }
 .local-progress-card { min-width: 0; }

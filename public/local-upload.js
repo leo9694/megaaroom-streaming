@@ -5,6 +5,7 @@
   let connected = false;
   let lastCompleted = "";
   let pollTimer;
+  let showHistory = false;
   let canDelete = false;
   let canOptimizeExisting = false;
   let canOptimizeSeason = false;
@@ -18,10 +19,20 @@
     <button type="button" class="mini-btn local-connect">Conectar auxiliar</button>
     <label>Uso de CPU do PC<select class="local-resource-profile" disabled><option>Conecte o auxiliar</option></select></label>
     <p class="local-resource-message" role="status">Escolha quanto do PC dedicar a conversao. Mais recursos podem deixar outros programas mais lentos.</p>
-    <p class="local-helper-message" role="status"></p><div class="local-copy-list"></div><div class="local-job-list"></div>`;
+    <p class="local-helper-message" role="status"></p>
+    <div class="local-activity-heading"><span>Processamentos</span><button class="mini-btn local-history-toggle" type="button" aria-expanded="false">Historico (0)</button></div>
+    <div class="local-copy-list"></div><div class="local-job-list"></div><div class="local-job-history hidden"></div>`;
   document.querySelector(".upload-card").append(panel);
   const message = panel.querySelector(".local-helper-message");
   const jobsList = panel.querySelector(".local-job-list");
+  const historyList = panel.querySelector(".local-job-history");
+  const historyButton = panel.querySelector(".local-history-toggle");
+  historyButton.addEventListener("click", () => {
+    showHistory = !showHistory;
+    historyButton.setAttribute("aria-expanded", String(showHistory));
+    historyList.classList.toggle("hidden", !showHistory);
+    poll();
+  });
   const input = panel.querySelector("input");
   const resourceSelect = panel.querySelector(".local-resource-profile");
   const resourceMessage = panel.querySelector(".local-resource-message");
@@ -122,6 +133,7 @@
       throw error;
     } finally {
       window.clearInterval(timer);
+      if (latest.phase === "done") view.card.remove();
       while (copyList.children.length > 5) copyList.firstElementChild.remove();
     }
   }
@@ -169,17 +181,18 @@
     polling = true;
     try {
       const jobs = await request("/jobs");
-      const pendingJobs = jobs.filter((job) => !["done", "error"].includes(job.status)).slice(0, 20);
-      const historySlots = 20 - pendingJobs.length;
-      const history = historySlots ? jobs.filter((job) => ["done", "error"].includes(job.status)).slice(-historySlots) : [];
-      const visibleJobs = [...pendingJobs, ...history];
+      const selected = window.MegaRoomLocalTransfer.selectJobs(jobs, showHistory);
+      historyButton.textContent = `Historico (${selected.completedCount})`;
+      const visibleJobs = selected.jobs;
       const visible = new Set(visibleJobs.map((job) => job.id));
       for (const [id, view] of jobCards) {
         if (!visible.has(id)) { view.card.remove(); jobCards.delete(id); transferSamples.delete(id); }
       }
       for (const job of visibleJobs) {
         let view = jobCards.get(job.id);
-        if (!view) { view = progressCard(job.title); jobCards.set(job.id, view); jobsList.append(view.card); }
+        if (!view) { view = progressCard(job.title); jobCards.set(job.id, view); }
+        const list = job.status === "done" ? historyList : jobsList;
+        if (view.card.parentElement !== list) list.append(view.card);
         const uploading = job.status === "uploading";
         const downloading = job.status === "downloading";
         const transferring = uploading || downloading;

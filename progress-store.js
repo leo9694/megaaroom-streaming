@@ -2,14 +2,27 @@ const fs = require('node:fs/promises');
 
 module.exports = function createProgressStore(file) {
   let queue = Promise.resolve();
+  const deleted = new Set();
   async function read() {
     try { return JSON.parse(await fs.readFile(file, 'utf8')); }
     catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
   }
   return {
     async all() { await queue; return read(); },
+    remove(ids) {
+      ids.forEach((id) => deleted.add(id));
+      const job = queue.then(async () => {
+        const data = await read();
+        for (const id of ids) delete data[id];
+        await fs.writeFile(`${file}.tmp`, JSON.stringify(data));
+        await fs.rename(`${file}.tmp`, file);
+      });
+      queue = job.catch(() => {});
+      return job;
+    },
     save(id, input) {
       const job = queue.then(async () => {
+        if (deleted.has(id)) throw new Error('INVALID_PROGRESS');
         const data = await read();
         const previous = data[id] || {};
         const position = input.position;

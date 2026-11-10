@@ -37,6 +37,7 @@ function createExistingLocal({ root, readLibrary, updateLibrary, findEntryById, 
   fs.mkdirSync(ticketsDir, { recursive: true });
   const reservations = new Map();
   const transfers = new Set();
+  const transferringEntries = new Set();
   for (const file of fs.readdirSync(ticketsDir)) {
     if (!/^[a-f0-9]{48}\.json$/.test(file)) continue;
     const saved = JSON.parse(fs.readFileSync(path.join(ticketsDir, file), "utf8"));
@@ -131,6 +132,7 @@ function createExistingLocal({ root, readLibrary, updateLibrary, findEntryById, 
     if (saved.result) return res.json(saved.result);
     if (transfers.has(id)) return res.sendStatus(409);
     transfers.add(id);
+    transferringEntries.add(saved.entryId);
     const stage = path.join(root, "streams", saved.entryId, ".local-" + id);
     const batch = "local-" + id + "-" + crypto.randomBytes(6).toString("hex");
     const destination = path.join(root, "streams", saved.entryId, batch);
@@ -193,8 +195,10 @@ function createExistingLocal({ root, readLibrary, updateLibrary, findEntryById, 
       await fsp.rm(stage, { recursive: true, force: true });
       if (!published) await fsp.rm(destination, { recursive: true, force: true });
       res.status(400).json({ error: "Otimizacao local incompleta: " + error.message });
-    } finally { transfers.delete(id); }
+    } finally { transfers.delete(id); transferringEntries.delete(saved.entryId); }
   });
-  return { ticket, seasonTickets, transfer, isReserved };
+  return { ticket, seasonTickets, transfer, isReserved,
+    isTransferring: (id) => transferringEntries.has(id),
+    forgetEntries: (ids) => ids.forEach((id) => reservations.delete(id)) };
 }
 module.exports = { createExistingLocal, mergeMasters };

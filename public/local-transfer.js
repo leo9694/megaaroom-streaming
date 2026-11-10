@@ -1,4 +1,10 @@
 (function (root) {
+  function selectJobs(jobs, showHistory) {
+    const pending = jobs.filter((job) => !["done", "error"].includes(job.status)).slice(0, 20);
+    const failures = jobs.filter((job) => job.status === "error").slice(-20);
+    const completed = jobs.filter((job) => job.status === "done");
+    return { jobs: [...pending, ...failures, ...(showHistory ? completed.slice(-50) : [])], completedCount: completed.length };
+  }
   function copyToHelper({ url, key, body, onProgress, XMLHttpRequestImpl = root.XMLHttpRequest, now = () => performance.now() }) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequestImpl();
@@ -43,6 +49,6 @@
       xhr.send(body);
     });
   }
-  if (typeof module === "object" && module.exports) module.exports = { copyToHelper };
-  else root.MegaRoomLocalTransfer = { copyToHelper };
+  if (typeof module === "object" && module.exports) module.exports = { copyToHelper, selectJobs };
+  else root.MegaRoomLocalTransfer = { copyToHelper, selectJobs };
 })(typeof window === "object" ? window : globalThis);

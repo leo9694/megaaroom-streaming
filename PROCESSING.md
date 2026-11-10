@@ -1,5 +1,24 @@
 # Video processing
 
+## Installation and cleanup
+
+Windows updates use a unique `MegaRoomAuxiliar/releases/<timestamp-id>` directory
+for the archive, extraction and npm ci. Existing executables are never unlinked
+by an update. The launcher switches only after dependencies and JS syntax pass;
+running helpers are not terminated. If port 43123 is occupied, installation asks
+the user to finish current work and reopen the launcher. Shared jobs, pairing
+and CPU settings remain in `~/.megaaroom-local`. Old releases are retained.
+
+Completed helper jobs are hidden unless History is expanded; errors stay visible.
+Deleting a catalogue item marks deletionPending, blocks further playback/jobs,
+stops only that entry's FFmpeg processes, and removes its upload folder, parent
+and episode stream directories (including temp/batch outputs), import tickets
+and watch progress before dropping the catalogue record. Concurrent local return
+transfers must finish first. Failure keeps the flagged item for retry instead of
+silently losing the reference to leftover files. Shared migrated source folders
+referenced by another catalogue item are retained. In-memory tombstones prevent
+queued FFmpeg jobs and stale progress saves from recreating deleted data.
+
 ## Local PC helper
 
 For series, the post-upload optimization form offers the selected episode or

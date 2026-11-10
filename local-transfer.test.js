@@ -1,6 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { copyToHelper } = require("./public/local-transfer");
+const { selectJobs } = require("./public/local-transfer");
+
+test("completed jobs only appear after opening history, while failures remain visible", () => {
+  const jobs = [{ id: "done", status: "done" }, { id: "failed", status: "error" }, { id: "active", status: "processing" }];
+  assert.deepEqual(selectJobs(jobs, false).jobs.map((job) => job.id), ["active", "failed"]);
+  assert.equal(selectJobs(jobs, false).completedCount, 1);
+  assert.deepEqual(selectJobs(jobs, true).jobs.map((job) => job.id), ["active", "failed", "done"]);
+});
 
 class Events {
   constructor() { this.listeners = {}; }

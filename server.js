@@ -1,6 +1,7 @@
 const express = require("express");
 const { parseProcessing, entryProcessing } = require("./processing-options");
 const { orderedEpisodes } = require("./episode-order");
+const { cleanupMediaFiles, mediaIds } = require("./media-cleanup");
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -54,6 +55,8 @@ const queuedPreparationJobs = new Map();
 const subtitleJobs = new Map();
 const subtitleStatus = new Map();
 const uploadProgress = new Map();
+const deletingEntries = new Set();
+const activeEncoders = new Map();
 
 function createId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -415,7 +418,9 @@ function isSupportedAudioTrack(track) {
 }
 
 function findEntryById(library, entryId) {
+  if (deletingEntries.has(entryId)) return null;
   for (const item of library.items) {
+    if (item.deletionPending) continue;
     if (item.id === entryId) {
       return {
         entryId,
@@ -700,6 +705,7 @@ function getHlsSnapshot(entryId) {
 }
 
 async function prepareHls(entry, analysis) {
+  if (deletingEntries.has(entry.entryId)) throw new Error("Midia em exclusao.");
   const finalHls = getHlsPaths(entry.entryId);
   const renditions = getHlsRenditions(analysis, entryProcessing(entry));
   if (!renditions.length) return null;
@@ -832,8 +838,9 @@ async function prepareHls(entry, analysis) {
     console.error(`[HLS] erro id=${entry.entryId}: ${summarizeProcessError(error)}`);
     await removeDirectoryIfExists(getHlsPaths(entry.entryId, true).folder);
     throw error;
-  }).finally(() => {
+  }).finally(async () => {
     hlsJobs.delete(entry.entryId);
+    if (deletingEntries.has(entry.entryId)) await removeDirectoryIfExists(path.join(STREAMS_DIR, entry.entryId));
   });
 
   hlsJobs.set(entry.entryId, job);
@@ -851,6 +858,7 @@ function getPreparedSubtitlePath(entryId, subtitleIndex) {
 }
 
 async function prepareSubtitle(entry, analysis, subtitleIndex) {
+  if (deletingEntries.has(entry.entryId)) throw new Error("Midia em exclusao.");
   const track = analysis.subtitleTracks[subtitleIndex];
   if (!track || track.kind !== "subtitles") {
     return null;
@@ -910,8 +918,9 @@ async function prepareSubtitle(entry, analysis, subtitleIndex) {
       });
       throw error;
     }
-  })().finally(() => {
+  })().finally(async () => {
     subtitleJobs.delete(jobKey);
+    if (deletingEntries.has(entry.entryId)) await removeDirectoryIfExists(path.join(STREAMS_DIR, entry.entryId));
   });
 
   subtitleJobs.set(jobKey, job);
@@ -938,10 +947,18 @@ function getSubtitleSnapshot(entryId, subtitleTracks) {
 
 function runFfmpeg(args, onProgress, spawnOptions = {}) {
   return scheduleFfmpeg(() => new Promise((resolve, reject) => {
+    const entryId = path.relative(STREAMS_DIR, args[args.length - 1]).split(path.sep)[0];
+    if (deletingEntries.has(entryId)) { reject(new Error("Midia em exclusao.")); return; }
     const policy = getMediaPolicy();
     const proc = spawn(ffmpegPath, [...limitFfmpegArgs(args, policy), "-progress", "pipe:1", "-nostats"], {
       windowsHide: true,
       ...spawnOptions
+    });
+    if (!activeEncoders.has(entryId)) activeEncoders.set(entryId, new Set());
+    activeEncoders.get(entryId).add(proc);
+    proc.once("close", () => {
+      activeEncoders.get(entryId)?.delete(proc);
+      if (!activeEncoders.get(entryId)?.size) activeEncoders.delete(entryId);
     });
     proc.once("spawn", () => lowerPriority(proc, policy));
     let stderr = "";
@@ -982,6 +999,7 @@ function runFfmpeg(args, onProgress, spawnOptions = {}) {
 }
 
 async function prepareVariant(entry, analysis, audioIndex, original = false) {
+  if (deletingEntries.has(entry.entryId)) throw new Error("Midia em exclusao.");
   const selectedTrack = analysis.audioTracks[audioIndex] || analysis.audioTracks[0];
   if (!selectedTrack) {
     throw new Error("Nenhuma faixa de áudio compatível foi encontrada.");
@@ -1086,8 +1104,9 @@ async function prepareVariant(entry, analysis, audioIndex, original = false) {
       audioIndex
     });
     return variant;
-  })().finally(() => {
+  })().finally(async () => {
     prepareJobs.delete(jobKey);
+    if (deletingEntries.has(entry.entryId)) await removeDirectoryIfExists(path.join(STREAMS_DIR, entry.entryId));
   });
 
   prepareJobs.set(jobKey, job);
@@ -1127,6 +1146,7 @@ async function queuePreparationForEntry(entryId) {
 
   const analysis = await analyzePlayback(entry);
   // Completed HLS does not need another fallback MP4 conversion.
+  if (deletingEntries.has(entryId)) return;
   const existingQualities = readHlsQualities(getHlsPaths(entry.entryId).masterPath);
   const renditions = getHlsRenditions(analysis, entryProcessing(entry));
   if (renditions.length && renditions.every((rendition) => existingQualities.includes(rendition.height))) {
@@ -1509,29 +1529,40 @@ app.post("/api/media/:id/cover", (req, res, next) => {
 });
 
 app.delete("/api/media/:id", async (req, res) => {
-  const removed = await updateLibrary((library) => {
+  try {
+    const library = await readLibrary();
     const item = library.items.find((entry) => entry.id === req.params.id);
-    if (!item) {
-      return null;
+    if (!item) return res.status(404).json({ error: "Midia nao encontrada." });
+    const ids = mediaIds(item);
+    if (localImport.isTransferring(item.localImportId) || ids.some((id) => existingLocal.isTransferring(id) || optimizationRequests.has(id))) {
+      return res.status(409).json({ error: "Aguarde a transferencia ou solicitacao de otimizacao terminar e tente apagar novamente." });
     }
-    library.items = library.items.filter((entry) => entry.id !== req.params.id);
-    return item;
-  });
-
-  if (!removed) {
-    return res.status(404).json({ error: "Mídia não encontrada." });
-  }
-
-  const uploadRemoved = await removeDirectoryIfExists(path.join(UPLOADS_DIR, removed.folder));
-  const streamRemoved = await removeDirectoryIfExists(path.join(STREAMS_DIR, removed.id));
-
-  if (!uploadRemoved || !streamRemoved) {
-    return res.status(409).json({
-      error: "A mídia foi removida do catálogo, mas os arquivos ainda estão em uso. Feche o player e tente apagar novamente em alguns segundos."
+    ids.forEach((id) => deletingEntries.add(id));
+    await updateLibrary((current) => {
+      const record = current.items.find((entry) => entry.id === item.id);
+      if (record) record.deletionPending = true;
     });
+    const processes = ids.flatMap((id) => [...(activeEncoders.get(id) || [])]);
+    await Promise.all(processes.map((proc) => new Promise((resolve, reject) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) { resolve(); return; }
+      const timer = setTimeout(() => reject(new Error("A conversao ainda esta encerrando. Tente apagar novamente.")), 10000);
+      proc.once("close", () => { clearTimeout(timer); resolve(); }); proc.kill("SIGTERM");
+    })));
+    await cleanupMediaFiles(ROOT, item, removeDirectoryIfExists, library.items.filter((other) => other.id !== item.id));
+    existingLocal.forgetEntries(ids);
+    await progressStore.remove(ids);
+    for (const id of ids) {
+      hlsStatus.delete(id); queuedPreparationJobs.delete(id);
+      for (const map of [analysisCache, prepareStatus, subtitleStatus]) {
+        for (const key of map.keys()) if (key.startsWith(id + ":")) map.delete(key);
+      }
+    }
+    await updateLibrary((current) => { current.items = current.items.filter((entry) => entry.id !== item.id); });
+    res.status(204).send();
+  } catch (error) {
+    console.error("[MIDIA] exclusao:", error.message);
+    res.status(409).json({ error: "Nao foi possivel concluir a limpeza. O cadastro foi mantido para tentar novamente. " + error.message });
   }
-
-  res.status(204).send();
 });
 
 app.get("*", (req, res) => {
