@@ -21,6 +21,15 @@ queued FFmpeg jobs and stale progress saves from recreating deleted data.
 
 ## Local PC helper
 
+The browser estimates remaining time from a bounded recent-progress window
+(60 seconds for byte transfers, 180 seconds for coarse processing percentages).
+Estimates require at least five seconds and positive measured progress. Each
+card resets its estimator on a phase/profile change, retry, or long idle gap.
+Unknown totals and stalled progress show nonnumeric waiting/calculating states.
+The display explicitly estimates the current download/processing/upload scope,
+not an unsupported total including future phases or season queue items. It
+reuses existing progress polls/events and needs no helper upgrade or timers.
+
 Helper v5 attaches live machine resources to active /jobs snapshots: aggregate
 CPU busy percentage from deltas in os.cpus().times, total/used physical RAM,
 and selected CPU profile/thread limit. This is whole-machine usage, not per-job

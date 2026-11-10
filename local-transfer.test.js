@@ -2,6 +2,43 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { copyToHelper } = require("./public/local-transfer");
 const { selectJobs } = require("./public/local-transfer");
+const { createEtaEstimator, formatEta } = require("./public/local-transfer");
+
+test("ETA estimates remaining time from actual progress and resets between phases", () => {
+  let time = 0;
+  const estimator = createEtaEstimator({ now: () => time });
+  const sample = (completed, phaseKey = "video", total = 100) => estimator.update({ phaseKey, completed, total });
+  assert.equal(sample(20).status, "calculating");
+  time = 3000;
+  assert.equal(sample(23).status, "calculating");
+  time = 5000;
+  assert.equal(sample(25).seconds, 75);
+  assert.match(formatEta(sample(25), "o processamento"), /2 minutos/);
+  time = 10000;
+  assert.ok(sample(35).seconds < 75, "ETA should respond to faster observed processing");
+  assert.equal(sample(0, "upload", 1000).status, "calculating", "Conversion speed must not be reused for upload");
+  time = 15000;
+  assert.equal(sample(500, "upload", 1000).seconds, 5);
+  assert.match(formatEta(sample(500, "upload", 1000), "o envio"), /menos de 1 minuto/);
+  time = 31000;
+  assert.equal(sample(500, "upload", 1000).status, "waiting");
+  time = 32000;
+  assert.equal(sample(1000, "upload", 1000).status, "finishing");
+  assert.equal(sample(0, "upload", 1000).status, "calculating", "Retries reset the estimate");
+});
+
+test("ETA handles unknown totals, idle resume and coarse processing progress", () => {
+  let time = 0;
+  const estimator = createEtaEstimator({ now: () => time });
+  assert.equal(estimator.update({ phaseKey: "video", completed: undefined, total: 100 }).status, "calculating");
+  estimator.update({ phaseKey: "video", completed: 34, total: 100, processing: true });
+  time = 60000;
+  const result = estimator.update({ phaseKey: "video", completed: 35, total: 100, processing: true });
+  assert.equal(result.seconds, 3900);
+  assert.match(formatEta(result, "o processamento"), /1 hora e 5 minutos/);
+  time = 400000;
+  assert.equal(estimator.update({ phaseKey: "video", completed: 45, total: 100, processing: true }).status, "calculating");
+});
 
 test("completed jobs only appear after opening history, while failures remain visible", () => {
   const jobs = [{ id: "done", status: "done" }, { id: "failed", status: "error" }, { id: "active", status: "processing" }];

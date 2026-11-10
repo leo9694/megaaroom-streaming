@@ -82,11 +82,12 @@
       <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill"></div></div>
       <p class="local-transfer-numbers"></p>
       <div class="local-resource-usage hidden"><span class="local-cpu-usage"></span><span class="local-memory-usage"></span><span class="local-profile-usage"></span><small>Uso total do PC, incluindo outros programas. O perfil indica o limite escolhido, nao o consumo medido.</small></div>
-      <p class="local-resource-hint hidden"></p><p class="local-progress-message" role="status"></p>`;
+      <p class="local-resource-hint hidden"></p><p class="local-progress-message" role="status"></p><p class="local-eta hidden"></p>`;
     card.querySelector("strong").textContent = title;
     const track = card.querySelector(".progress-track");
     const fill = card.querySelector(".progress-fill");
-    return { card, update({ phase, percent = null, loaded = 0, total = 0, speed = 0, message = "", active = false, failed = false, resources = null, resourceHint = false }) {
+    const estimator = window.MegaRoomLocalTransfer.createEtaEstimator();
+    return { card, update({ phase, percent = null, loaded = 0, total = 0, speed = 0, message = "", active = false, failed = false, resources = null, resourceHint = false, etaSample = null }) {
       const known = Number.isFinite(percent);
       card.dataset.active = String(active);
       card.dataset.failed = String(failed);
@@ -99,6 +100,10 @@
       card.querySelector(".local-transfer-numbers").textContent = total || loaded
         ? `${bytes(loaded)} / ${total ? bytes(total) : "tamanho desconhecido"} · ${speed > 0 ? bytes(speed) + "/s" : "Aguardando dados"}` : "";
       card.querySelector(".local-progress-message").textContent = message;
+      const eta = card.querySelector(".local-eta");
+      eta.classList.toggle("hidden", !etaSample);
+      if (etaSample) eta.textContent = window.MegaRoomLocalTransfer.formatEta(estimator.update(etaSample), etaSample.label);
+      else estimator.reset();
       card.querySelector(".local-resource-usage").classList.toggle("hidden", !resources);
       const hint = card.querySelector(".local-resource-hint");
       hint.classList.toggle("hidden", !resourceHint);
@@ -120,6 +125,7 @@
       const done = latest.phase === "done";
       const failed = latest.phase === "error";
       view.update({ ...latest, percent: waiting ? null : latest.percent,
+        etaSample: !waiting && !done && !failed ? { phaseKey: "copying", completed: latest.loaded, total: latest.total, label: "a copia para o PC" } : null,
         phase: failed ? "Copia interrompida" : done ? "Recebido no PC" : waiting ? "Confirmando recebimento" : "Copiando para o PC",
         speed: idle > 3 ? 0 : latest.speed,
         active: !done && !failed && (waiting || idle < 10), failed,
@@ -222,6 +228,12 @@
           speed: stale ? 0 : job.speedBytesPerSecond ?? measuredSpeed,
           resources: job.resources,
           resourceHint: ["processing", "uploading", "downloading"].includes(job.status) && job.resources === undefined,
+          etaSample: transferring || job.status === "processing" ? {
+            phaseKey: `${job.status}:${job.resources?.profile?.id || ""}:${job.processing?.audioIndex ?? ""}:${(job.processing?.message || job.message || "").replace(/\d+(?:[.,]\d+)?%/g, "")}`,
+            completed: transferring ? job.loaded : job.processing?.percent,
+            total: transferring ? job.total : 100, processing: !transferring,
+            label: downloading ? "o download do original" : uploading ? "o envio para a VPS" : "o processamento (sem contar o envio)"
+          } : null,
           active: ["processing", "uploading", "downloading"].includes(job.status) && !stale, failed: job.status === "error",
           message: stale && transferring ? "Sem novos dados de transferencia. Aguardando a conexao com a VPS." : processing ? job.processing.message : job.message });
         const previousActions = view.card.querySelector(".local-job-actions");
@@ -265,6 +277,7 @@
         view.card.dataset.active = "false";
         view.card.querySelector(".progress-fill").classList.remove("is-indeterminate");
         view.card.querySelector(".local-resource-usage").classList.add("hidden");
+        view.card.querySelector(".local-eta").classList.add("hidden");
         view.card.querySelector(".local-progress-message").textContent = "Sem conexao com o auxiliar. Reconecte para confirmar o progresso.";
       }
     }
