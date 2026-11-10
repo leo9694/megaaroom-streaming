@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const multer = require("multer");
 const { parseProcessing } = require("./processing-options");
+const { validateNewEpisodes, appendEpisodes } = require("./season-episodes");
 
 function artifactPath(field, count) {
   const match = /^asset-(\d+):(.+)$/.exec(field);
@@ -53,11 +54,17 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
   const ticketDir = path.join(root, "data", "local-tickets");
   fs.mkdirSync(ticketDir, { recursive: true });
   const active = new Set();
+  const activeTargets = new Map();
   const ticket = async (req, res) => {
     try {
       const body = req.body;
       if (!["movie", "series"].includes(body.kind) || !Number.isInteger(body.count) || body.count < 1 || body.count > 100 || (body.kind === "movie" && body.count !== 1)) throw new Error("Invalid media count");
       const processing = parseProcessing({ enabled: true, qualities: body.qualities });
+      if (body.targetSeriesId) {
+        if (body.kind !== "series") throw new Error("Tipo de envio invalido.");
+        const season = (await readLibrary()).items.find((item) => item.id === body.targetSeriesId);
+        validateNewEpisodes(season, body.count, Number(body.startEpisodeNumber));
+      }
       const id = crypto.randomBytes(24).toString("hex");
       const token = crypto.randomBytes(32).toString("hex");
       for (const file of await fsp.readdir(ticketDir)) {
@@ -67,6 +74,7 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
       }
       await fsp.writeFile(path.join(ticketDir, id + ".json"), JSON.stringify({
         token, expires: Date.now() + 7 * 86400000, kind: body.kind, count: body.count,
+        targetSeriesId: body.targetSeriesId || null, startEpisodeNumber: Number(body.startEpisodeNumber) || null,
         fields: { title: String(body.title || "").slice(0, 300), genre: String(body.genre || "").slice(0, 300),
           synopsis: String(body.synopsis || "").slice(0, 10000), year: String(body.year || "").slice(0, 20),
           seasonNumber: Number(body.seasonNumber) || 1, processing }
@@ -85,11 +93,14 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
     if (active.has(id)) return res.sendStatus(409);
     if (saved.result) return res.json(saved.result);
     active.add(id);
+    if (saved.targetSeriesId) activeTargets.set(id, saved.targetSeriesId);
     try {
-      const published = (await readLibrary()).items.find((item) => item.localImportId === id);
-      if (published) { active.delete(id); return res.json({ item: published }); }
+      const items = (await readLibrary()).items;
+      const published = items.find((item) => item.localImportId === id || item.episodes?.some((episode) => episode.localImportId === id));
+      if (published) { active.delete(id); activeTargets.delete(id); return res.json({ item: published }); }
+      if (saved.targetSeriesId) validateNewEpisodes(items.find((item) => item.id === saved.targetSeriesId), saved.count, saved.startEpisodeNumber);
     } catch {
-      active.delete(id); return res.status(500).json({ error: "Nao foi possivel ler o catalogo." });
+      active.delete(id); activeTargets.delete(id); return res.status(409).json({ error: "Temporada indisponivel ou numeros de episodio ja utilizados." });
     }
     const stage = path.join(root, "uploads", "local-" + id);
     const moved = [];
@@ -143,9 +154,15 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
         const dest = path.join(root, "streams", entries[i].id);
         await fsp.rename(prepared, dest); moved.push(dest);
       }
-      await updateLibrary((library) => { library.items.unshift(item); });
+      let publishedItem = item;
+      await updateLibrary((library) => {
+        if (!saved.targetSeriesId) { library.items.unshift(item); return; }
+        const season = library.items.find((entry) => entry.id === saved.targetSeriesId);
+        appendEpisodes(season, item.episodes.map((episode) => ({ ...episode, processing: saved.fields.processing, localImportId: id })), saved.startEpisodeNumber, item.folder);
+        publishedItem = season;
+      });
       committed = true;
-      saved.result = { item };
+      saved.result = { item: publishedItem };
       await fsp.writeFile(path.join(ticketDir, id + ".json"), JSON.stringify(saved), { mode: 0o600 });
       await fsp.rm(path.join(stage, "prepared"), { recursive: true, force: true });
       res.status(201).json(saved.result);
@@ -156,9 +173,9 @@ function createLocalImport({ root, buildMovieItem, buildSeriesItem, updateLibrar
       }
       console.error("[LOCAL IMPORT]", error.message);
       res.status(400).json({ error: "Envio local incompleto: " + error.message });
-    } finally { active.delete(id); }
+    } finally { active.delete(id); activeTargets.delete(id); }
   });
-  return { ticket, transfer, isTransferring: (id) => active.has(id) };
+  return { ticket, transfer, isTransferring: (id) => active.has(id), isTargetTransferring: (id) => [...activeTargets.values()].includes(id) };
 }
 
 module.exports = { createLocalImport, artifactPath, verifyPlaylists, validateAnalysis };

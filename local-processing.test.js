@@ -24,7 +24,7 @@ test("import rejects traversal and remote asset references", () => {
   assert.deepEqual(artifactPath("asset-0:hls/480p/index.m3u8", 1), { index: 0, relative: "hls/480p/index.m3u8" });
 });
 
-test("PC converts real video, uploads to authenticated VPS and publishes ready media", { timeout: 60000 }, async () => {
+test("PC converts real video, uploads to authenticated VPS and publishes ready media", { timeout: 120000 }, async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "megaaroom-local-e2e-"));
   const pc = path.join(temp, "pc");
   const remote = path.join(temp, "vps");
@@ -134,6 +134,49 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
       assert.equal(ready.playbackType, "hls");
       assert.equal(ready.subtitleTracks[0].status, "ready");
     }
+    const previousEpisodeIds = season.episodes.map((episode) => episode.id);
+    await fetch(origin + `/api/progress/${previousEpisodeIds[0]}`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ position: 0.5, duration: 2 }) });
+    async function appendRawEpisode(number) {
+      const data = new FormData();
+      data.append("startEpisodeNumber", String(number));
+      data.append("processing", JSON.stringify({ enabled: false, qualities: [] }));
+      data.append("episodes", new Blob([bytes], { type: "video/x-matroska" }), `S02E${number}.mkv`);
+      return fetch(origin + `/api/series/${season.id}/episodes`, { method: "POST", headers: credentials, body: data });
+    }
+    const beforeRejected = await fs.readdir(path.join(remote, "uploads"));
+    assert.equal((await appendRawEpisode(2)).status, 409);
+    assert.deepEqual(await fs.readdir(path.join(remote, "uploads")), beforeRejected);
+    const addedRaw = await appendRawEpisode(3);
+    assert.equal(addedRaw.status, 201, await addedRaw.clone().text());
+    const rawItem = (await addedRaw.json()).item;
+    assert.deepEqual(rawItem.episodes.map((episode) => episode.episodeNumber), [1, 2, 3]);
+    assert.deepEqual(rawItem.episodes.slice(0, 2).map((episode) => episode.id), previousEpisodeIds);
+    assert.equal(rawItem.episodes[2].processing.enabled, false);
+
+    const appendTicket = await (await fetch(origin + "/api/local-import/ticket", { method: "POST", headers: { ...credentials, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "series", count: 1, targetSeriesId: season.id, startEpisodeNumber: 4, title: season.title, qualities: [480] }) })).json();
+    const appendBody = new FormData();
+    appendBody.append("metadata", JSON.stringify({ kind: "series", title: season.title, qualities: [480], ticket: appendTicket }));
+    appendBody.append("videos", new Blob([bytes], { type: "video/x-matroska" }), "S02E04.mkv");
+    assert.equal((await fetch(base + "/jobs", { method: "POST", headers, body: appendBody })).status, 202);
+    for (let i = 0; i < 200; i++) {
+      const active = await (await fetch(base + "/jobs", { headers })).json();
+      const pending = active.find((job) => job.status !== "done");
+      if (!pending) break;
+      assert.notEqual(pending.status, "error", pending.message);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const afterAppend = await (await fetch(origin + "/api/library", { headers: credentials })).json();
+    assert.equal(afterAppend.items.length, 2, "Appending episodes must not create another season");
+    const appended = afterAppend.items.find((item) => item.id === season.id);
+    assert.deepEqual(appended.episodes.map((episode) => episode.episodeNumber), [1, 2, 3, 4]);
+    assert.deepEqual(appended.episodes.slice(0, 2).map((episode) => episode.id), previousEpisodeIds);
+    assert.equal(appended.seasonNumber, 2);
+    const preservedProgress = await (await fetch(origin + "/api/progress", { headers: credentials })).json();
+    assert.equal(preservedProgress[previousEpisodeIds[0]].position, 0.5);
+    assert.equal(appended.episodes[3].localAnalysis.videoCodec, "h264");
+    assert.equal((await fetch(origin + `/api/local-import/transfer/${appendTicket.id}`, { method: "POST", headers: { "X-Import-Token": appendTicket.token } })).status, 200);
+    season.episodes = appended.episodes; season.uploadFolders = appended.uploadFolders;
     // Simulate a catalogue written by the old importer and an unoptimized upload.
     const libraryPath = path.join(remote, "data", "library.json");
     const stored = JSON.parse(await fs.readFile(libraryPath, "utf8"));
@@ -191,7 +234,7 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const seasonAuthorization = await fetch(origin + `/api/series/${season.id}/local-tickets`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [720] }) });
     assert.equal(seasonAuthorization.status, 200);
     const seasonBatch = await seasonAuthorization.json();
-    assert.deepEqual(seasonBatch.tickets.map((ticket) => ticket.episodeNumber), [1, 2]);
+    assert.deepEqual(seasonBatch.tickets.map((ticket) => ticket.episodeNumber), [1, 2, 3, 4]);
     downloads.length = 0;
     const orderedSubmission = await fetch(base + "/jobs/from-season", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ tickets: [...seasonBatch.tickets].reverse(), profile: "economy" }) });
     assert.equal(orderedSubmission.status, 202, await orderedSubmission.text());
@@ -205,7 +248,7 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     assert.deepEqual(downloads, seasonBatch.tickets.map((ticket) => `/api/local-import/transfer/existing/${ticket.id}/source`));
     for (const episode of season.episodes) {
       const ready = await (await fetch(origin + `/api/playback/${episode.id}`, { headers: credentials })).json();
-      assert.deepEqual(ready.qualities, [720, 480]);
+      assert.deepEqual(ready.qualities, episode.episodeNumber === 3 ? [720] : [720, 480]);
     }
     const completedSeason = await (await fetch(origin + `/api/series/${season.id}/local-tickets`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [720] }) })).json();
     assert.equal(completedSeason.ready, true);
@@ -216,6 +259,7 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const deletion = await fetch(origin + `/api/media/${season.id}`, { method: "DELETE", headers: credentials });
     assert.equal(deletion.status, 204, await deletion.text());
     await assert.rejects(fs.stat(path.join(remote, "uploads", season.folder)), { code: "ENOENT" });
+    for (const folder of season.uploadFolders) await assert.rejects(fs.stat(path.join(remote, "uploads", folder)), { code: "ENOENT" });
     for (const episode of season.episodes) await assert.rejects(fs.stat(path.join(remote, "streams", episode.id)), { code: "ENOENT" });
     const afterDeletion = await (await fetch(origin + "/api/library", { headers: credentials })).json();
     assert.equal(afterDeletion.items.length, 2);

@@ -287,14 +287,16 @@
     }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
-  for (const form of document.querySelectorAll("#movieForm, #seriesForm")) {
+  for (const form of document.querySelectorAll("#movieForm, #seriesForm, #addEpisodesForm")) {
     const field = document.createElement("label");
     field.innerHTML = `<span>Onde otimizar</span><select name="processingLocation"><option value="server">Na VPS</option><option value="local">Neste computador</option></select>`;
     form.querySelector(".processing-check").after(field);
     const location = field.querySelector("select");
+    const helperHost = form.id === "addEpisodesForm" ? document.getElementById("addEpisodesLocalControls") : document.querySelector(".upload-card");
     location.addEventListener("change", () => {
+      if (form.id === "addEpisodesForm") helperHost.classList.toggle("hidden", location.value !== "local");
       if (location.value === "local") {
-        document.querySelector(".upload-card").append(panel);
+        helperHost.append(panel);
         form.elements.processVideo.checked = true;
         form.dispatchEvent(new Event("change"));
         panel.open = true;
@@ -303,7 +305,7 @@
     form.addEventListener("submit", async (event) => {
       if (!form.elements.processVideo.checked || location.value !== "local") return;
       event.preventDefault(); event.stopImmediatePropagation();
-      document.querySelector(".upload-card").append(panel);
+      helperHost.classList.remove("hidden"); helperHost.append(panel);
       const button = form.querySelector('[type="submit"]'); button.disabled = true;
       try {
         await connect();
@@ -319,16 +321,22 @@
             title: kind === "movie" && files.length > 1 ? "" : form.elements.title.value,
             genre: form.elements.genre.value, year: form.elements.year.value,
             synopsis: form.elements.synopsis.value, seasonNumber: form.elements.seasonNumber?.value || 1 };
+          if (form.id === "addEpisodesForm") {
+            meta.targetSeriesId = form.elements.targetSeriesId.value;
+            meta.startEpisodeNumber = Number(form.elements.startEpisodeNumber.value);
+          }
           const response = await fetch("/api/local-import/ticket", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(meta) });
-          if (!response.ok) throw new Error("Nao foi possivel autorizar o envio para a VPS.");
-          meta.ticket = await response.json();
+          const authorization = await response.json();
+          if (!response.ok) throw new Error(authorization.error || "Nao foi possivel autorizar o envio para a VPS.");
+          meta.ticket = authorization;
           const body = new FormData(); body.append("metadata", JSON.stringify(meta));
           for (const file of group) body.append("videos", file);
-          if (form.elements.cover.files[0]) body.append("cover", form.elements.cover.files[0]);
+          if (form.elements.cover?.files[0]) body.append("cover", form.elements.cover.files[0]);
           say("Copiando arquivo para o auxiliar no PC. Aguarde antes de fechar esta pagina.");
           await copyFiles(body, meta.title || group[0].name);
         }
-        form.reset();
+        if (form.id === "addEpisodesForm") form.elements.episodes.value = "";
+        else form.reset();
         say("Arquivos recebidos no PC. O auxiliar continuara processando e enviando mesmo com F5. Mantenha o PC ligado e a janela do auxiliar aberta.");
       } catch (error) { say(error.message); }
       finally { button.disabled = false; }

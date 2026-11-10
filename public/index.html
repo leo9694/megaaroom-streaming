@@ -268,6 +268,28 @@
                     <button id="changeCoverButton" class="mini-btn" type="button">Adicionar/alterar capa</button>
                     <input id="coverFileInput" type="file" accept="image/*" class="hidden" />
                   </div>
+                  <details id="addEpisodesSection" class="processing-options hidden">
+                    <summary class="mini-btn">Adicionar episodios a esta temporada</summary>
+                    <form id="addEpisodesForm" class="upload-form">
+                      <input name="targetSeriesId" type="hidden" /><input name="title" type="hidden" /><input name="genre" type="hidden" /><input name="year" type="hidden" /><input name="synopsis" type="hidden" /><input name="seasonNumber" type="hidden" />
+                      <label><span>Primeiro novo episodio</span><input name="startEpisodeNumber" type="number" min="1" max="100000" required /></label>
+                      <label><span>Novos episodios</span><input name="episodes" type="file" accept="video/*,.mkv,.mp4,.avi,.mov,.webm" multiple required /></label>
+                      <p>Os arquivos sao ordenados pelo nome e numerados a partir do numero acima. Episodios existentes nao serao substituidos.</p>
+                      <fieldset class="processing-options">
+                        <legend>Processamento dos novos episodios</legend>
+                        <label class="processing-check"><input type="checkbox" name="processVideo" /><span>Otimizar para reproducao</span></label>
+                        <fieldset class="processing-qualities"><legend>Qualidades desejadas</legend>
+                          <label><input type="checkbox" name="quality" value="480" /> 480p</label>
+                          <label><input type="checkbox" name="quality" value="720" /> 720p</label>
+                          <label><input type="checkbox" name="quality" value="1080" /> 1080p</label>
+                        </fieldset>
+                        <p>Sem otimizacao, mantem o video original e prepara audio e legendas.</p>
+                      </fieldset>
+                      <button type="submit" class="mini-btn">Enviar novos episodios</button>
+                      <p id="addEpisodesMessage" role="status"></p>
+                    </form>
+                    <div id="addEpisodesLocalControls" class="hidden"></div>
+                  </details>
                   <details class="processing-options">
                     <summary class="mini-btn">Otimizar video</summary>
                     <form id="optimizeForm" class="upload-form">

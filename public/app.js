@@ -52,6 +52,7 @@ const lazyCoverObserver = "IntersectionObserver" in window
 const statusMessage = document.getElementById("statusMessage");
 const movieForm = document.getElementById("movieForm");
 const seriesForm = document.getElementById("seriesForm");
+const addEpisodesForm = document.getElementById("addEpisodesForm");
 const uploadList = document.getElementById("uploadList");
 const activeUploadsBadge = document.getElementById("activeUploadsBadge");
 const emptyStateTemplate = document.getElementById("emptyStateTemplate");
@@ -205,7 +206,7 @@ setPlayerIcon(fullscreenToggle, "fullscreen");
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("is-active"));
-    document.querySelectorAll(".upload-form").forEach((form) => form.classList.add("hidden"));
+    document.querySelectorAll("#movieForm, #seriesForm").forEach((form) => form.classList.add("hidden"));
     button.classList.add("is-active");
     document.getElementById(button.dataset.target).classList.remove("hidden");
     setStatus("");
@@ -485,7 +486,7 @@ function appendProcessingOptions(formData, form) {
   }));
 }
 
-for (const form of [movieForm, seriesForm]) {
+for (const form of [movieForm, seriesForm, addEpisodesForm]) {
   form.addEventListener("change", (event) => syncProcessingOptions(form, event.target));
   form.addEventListener("reset", () => queueMicrotask(() => syncProcessingOptions(form)));
   syncProcessingOptions(form);
@@ -574,6 +575,53 @@ seriesForm.addEventListener("submit", (event) => {
   setStatus("Upload da temporada iniciado.");
 });
 
+addEpisodesForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const files = [...form.elements.episodes.files];
+  if (!files.length || !form.elements.targetSeriesId.value) return;
+  const data = new FormData();
+  appendProcessingOptions(data, form);
+  data.append("startEpisodeNumber", form.elements.startEpisodeNumber.value);
+  files.forEach((file) => data.append("episodes", file));
+  startTrackedUpload({ kind: "series", title: `${form.elements.title.value} - novos episodios`, subtitle: `${files.length} episodio(s)`,
+    url: `/api/series/${encodeURIComponent(form.elements.targetSeriesId.value)}/episodes`, formData: data });
+  form.elements.episodes.value = "";
+  document.getElementById("addEpisodesMessage").textContent = "Envio iniciado. Os novos episodios aparecerao na lista ao concluir.";
+});
+
+function updateAddEpisodesTarget(item) {
+  const isSeries = item.type === "series";
+  document.getElementById("addEpisodesSection").classList.toggle("hidden", !isSeries);
+  if (!isSeries) return;
+  const first = addEpisodesForm.elements.startEpisodeNumber;
+  if (addEpisodesForm.dataset.mediaId !== item.id) {
+    addEpisodesForm.reset(); addEpisodesForm.dataset.mediaId = item.id;
+    document.getElementById("addEpisodesMessage").textContent = "";
+  }
+  const next = Math.max(0, ...item.episodes.map((episode) => Number(episode.episodeNumber) || 0)) + 1;
+  const untouched = !first.value || first.value === first.defaultValue;
+  first.defaultValue = String(next); if (untouched) first.value = String(next);
+  for (const name of ["title", "genre", "year", "synopsis", "seasonNumber"]) addEpisodesForm.elements[name].value = item[name] || "";
+  addEpisodesForm.elements.targetSeriesId.value = item.id;
+}
+
+function renderEpisodePanel(item) {
+  if (item.type !== "series") return;
+  const signature = JSON.stringify([item.id, state.currentEpisodeId, item.episodes.map((episode) => [episode.id, episode.episodeNumber, episode.title])]);
+  if (episodePanel.dataset.signature === signature) return;
+  episodePanel.dataset.signature = signature;
+  episodePanel.innerHTML = item.episodes.map((episode) => `
+    <button class="episode-item ${episode.id === state.currentEpisodeId ? "is-active" : ""}" data-episode-id="${episode.id}" type="button">
+      Episodio ${episode.episodeNumber}<small>${escapeHtml(episode.title)}</small><small class="episode-progress"></small>
+    </button>`).join("");
+  episodePanel.querySelectorAll("[data-episode-id]").forEach((button) => button.addEventListener("click", () => {
+    state.currentEpisodeId = button.dataset.episodeId;
+    renderDetail(state.library.find((entry) => entry.id === item.id) || item);
+  }));
+  updateEpisodeMarks();
+}
+
 async function loadLibrary(silent = false, options = {}) {
   const shouldSyncRoute = options.syncRoute !== false;
 
@@ -615,6 +663,10 @@ function refreshVisibleLibraryParts() {
   }
 
   updateOptimizationTarget(item);
+  updateAddEpisodesTarget(item);
+  renderEpisodePanel(item);
+  detailMeta.textContent = buildMeta(item);
+  updateEpisodeActions(item);
   renderRelated(item);
 }
 
@@ -870,6 +922,7 @@ function renderDetail(item) {
 
   if (item.type === "movie") {
     detailPanelTitle.textContent = "Arquivo disponivel";
+    episodePanel.dataset.signature = "";
     episodePanel.innerHTML = `
       <button class="episode-item is-active" type="button">
         Filme completo
@@ -881,24 +934,7 @@ function renderDetail(item) {
     detailPanelTitle.textContent = "Lista de episodios";
     const selectedEpisode = item.episodes.find((episode) => episode.id === state.currentEpisodeId) || item.episodes[0];
     state.currentEpisodeId = selectedEpisode?.id || null;
-    episodePanel.innerHTML = item.episodes
-      .map(
-        (episode) => `
-          <button class="episode-item ${episode.id === state.currentEpisodeId ? "is-active" : ""}" data-episode-id="${episode.id}" type="button">
-            Episodio ${episode.episodeNumber}
-            <small>${escapeHtml(episode.title)}</small>
-            <small class="episode-progress"></small>
-          </button>
-        `
-      )
-      .join("");
-
-    episodePanel.querySelectorAll("[data-episode-id]").forEach((button) => {
-      button.addEventListener("click", () => {
-        state.currentEpisodeId = button.dataset.episodeId;
-        renderDetail(item);
-      });
-    });
+    renderEpisodePanel(item);
 
     if (selectedEpisode) {
       loadPlaybackSource(selectedEpisode.id);
@@ -908,6 +944,7 @@ function renderDetail(item) {
   updateOptimizationTarget(item);
   renderRelated(item);
   updateEpisodeMarks();
+  updateAddEpisodesTarget(item);
 }
 
 async function loadPlaybackSource(entryId) {

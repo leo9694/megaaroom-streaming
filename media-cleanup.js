@@ -14,7 +14,9 @@ async function cleanupMediaFiles(root, item, removeDirectory, remaining = []) {
   };
   const targets = new Set([...ids].map((id) => safe("streams", id)));
   // Some migrated catalogues reference the same original from multiple items.
-  if (item.folder && !remaining.some((entry) => entry.folder === item.folder)) targets.add(safe("uploads", item.folder));
+  const uploadFolders = (entry) => [entry.folder, ...(entry.uploadFolders || []), ...(entry.episodes || []).map((episode) => episode.folder)].filter(Boolean);
+  const sharedFolders = new Set(remaining.flatMap(uploadFolders));
+  for (const folder of uploadFolders(item)) if (!sharedFolders.has(folder)) targets.add(safe("uploads", folder));
   const ticketFiles = [];
   for (const directory of ["local-tickets", "existing-tickets"]) {
     const folder = path.join(root, "data", directory);
@@ -24,10 +26,10 @@ async function cleanupMediaFiles(root, item, removeDirectory, remaining = []) {
       if (!/^[a-f0-9]{48}\.json$/.test(name)) continue;
       const file = path.join(folder, name);
       const ticket = JSON.parse(await fs.readFile(file, "utf8"));
-      if (ids.has(ticket.entryId) || ticket.result?.item?.id === item.id || name === item.localImportId + ".json") {
+      if (ids.has(ticket.entryId) || ticket.targetSeriesId === item.id || ticket.result?.item?.id === item.id || name === item.localImportId + ".json") {
         ticketFiles.push(file);
         const stagingFolder = "local-" + name.slice(0, -5);
-        if (directory === "local-tickets" && !remaining.some((entry) => entry.folder === stagingFolder)) targets.add(safe("uploads", stagingFolder));
+        if (directory === "local-tickets" && !sharedFolders.has(stagingFolder)) targets.add(safe("uploads", stagingFolder));
       }
     }
   }

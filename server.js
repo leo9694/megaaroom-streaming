@@ -2,6 +2,7 @@ const express = require("express");
 const { parseProcessing, entryProcessing } = require("./processing-options");
 const { orderedEpisodes } = require("./episode-order");
 const { cleanupMediaFiles, mediaIds } = require("./media-cleanup");
+const { validateNewEpisodes, appendEpisodes } = require("./season-episodes");
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -57,6 +58,7 @@ const subtitleStatus = new Map();
 const uploadProgress = new Map();
 const deletingEntries = new Set();
 const activeEncoders = new Map();
+const activeEpisodeUploads = new Map();
 
 function createId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -191,13 +193,14 @@ async function writeLibrary(data) {
 }
 
 function updateLibrary(mutator) {
-  libraryWriteQueue = libraryWriteQueue.then(async () => {
+  const job = libraryWriteQueue.then(async () => {
     const library = await readLibrary();
     const result = await mutator(library);
     await writeLibrary(library);
     return result;
   });
-  return libraryWriteQueue;
+  libraryWriteQueue = job.catch(() => {});
+  return job;
 }
 
 function markUploadProgress(uploadId, patch) {
@@ -1488,6 +1491,40 @@ app.post(
   }
 );
 
+app.post("/api/series/:id/episodes", createUploadTracker,
+  async (req, res, next) => {
+    try {
+      const season = (await readLibrary()).items.find((item) => item.id === req.params.id && item.type === "series" && !item.deletionPending);
+      if (!season) return res.status(404).json({ error: "Temporada nao encontrada." });
+      activeEpisodeUploads.set(req, season.id);
+      res.once("finish", () => activeEpisodeUploads.delete(req));
+      res.once("close", () => activeEpisodeUploads.delete(req));
+      next();
+    } catch (error) { next(error); }
+  }, upload.array("episodes", 100), async (req, res) => {
+    let committed = false;
+    try {
+      const files = [...(req.files || [])].sort((a, b) => a.originalname.localeCompare(b.originalname, undefined, { numeric: true, sensitivity: "base" }));
+      const processing = parseProcessing(req.body.processing);
+      const start = Number(req.body.startEpisodeNumber);
+      if (!files.length) throw new Error("Selecione ao menos um episodio.");
+      const batch = buildSeriesItem(files, { title: "Novos episodios", processing }, null);
+      let added;
+      const item = await updateLibrary((library) => {
+        const season = library.items.find((entry) => entry.id === req.params.id);
+        validateNewEpisodes(season, files.length, start);
+        added = appendEpisodes(season, batch.episodes.map((episode) => ({ ...episode, processing })), start, req.uploadFolderName);
+        return season;
+      });
+      committed = true;
+      for (const episode of added) enqueuePreparationForEntry(episode.id).catch(() => {});
+      res.status(201).json({ item, addedEpisodes: added.map((episode) => episode.id) });
+    } catch (error) {
+      if (!committed && req.uploadFolderName) await removeDirectoryIfExists(path.join(UPLOADS_DIR, req.uploadFolderName));
+      res.status(409).json({ error: error.message });
+    }
+  });
+
 app.post("/api/media/:id/cover", (req, res, next) => {
   coverUpload.single("cover")(req, res, (error) => {
     if (error) {
@@ -1534,7 +1571,7 @@ app.delete("/api/media/:id", async (req, res) => {
     const item = library.items.find((entry) => entry.id === req.params.id);
     if (!item) return res.status(404).json({ error: "Midia nao encontrada." });
     const ids = mediaIds(item);
-    if (localImport.isTransferring(item.localImportId) || ids.some((id) => existingLocal.isTransferring(id) || optimizationRequests.has(id))) {
+    if ([...activeEpisodeUploads.values()].includes(item.id) || localImport.isTransferring(item.localImportId) || localImport.isTargetTransferring(item.id) || ids.some((id) => existingLocal.isTransferring(id) || optimizationRequests.has(id))) {
       return res.status(409).json({ error: "Aguarde a transferencia ou solicitacao de otimizacao terminar e tente apagar novamente." });
     }
     ids.forEach((id) => deletingEntries.add(id));

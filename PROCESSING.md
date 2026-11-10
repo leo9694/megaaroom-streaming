@@ -21,6 +21,18 @@ queued FFmpeg jobs and stale progress saves from recreating deleted data.
 
 ## Local PC helper
 
+Series details include an add-episodes form targeting the same stored season.
+Files are naturally sorted by filename, then numbered from an explicit first
+episode (default: highest existing number + 1). Overlapping numbers reject the
+whole batch; existing IDs, metadata, watch progress and media are retained.
+Direct VPS uploads can skip video optimization or process selected qualities;
+local prepared uploads carry a targetSeriesId in the upload ticket and append
+only after validated artifacts arrive. Receiver-side append is serialized with
+other catalogue writes, including a second conflict check on completion.
+Each episode saves its own processing options. Additional upload folders are
+tracked for full season deletion. The episode list refreshes independently of
+the video element. The existing helper protocol is reused (no helper upgrade).
+
 The browser estimates remaining time from a bounded recent-progress window
 (60 seconds for byte transfers, 180 seconds for coarse processing percentages).
 Estimates require at least five seconds and positive measured progress. Each
