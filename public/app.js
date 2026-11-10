@@ -782,7 +782,9 @@ const optimizeForm = document.getElementById("optimizeForm");
 const optimizeMessage = document.getElementById("optimizeMessage");
 const pendingOptimizations = new Set();
 function updateOptimizationTarget(item) {
-  const entry = item.type === "series"
+  const wholeSeason = item.type === "series" && optimizeForm.elements.optimizationScope.value === "season";
+  document.getElementById("optimizeScopeField").classList.toggle("hidden", item.type !== "series");
+  const entry = wholeSeason ? item : item.type === "series"
     ? item.episodes.find((episode) => episode.id === state.currentEpisodeId) : item;
   const entryId = entry?.id || "";
   if (optimizeForm.dataset.entryId !== entryId) {
@@ -791,13 +793,19 @@ function updateOptimizationTarget(item) {
   }
   optimizeForm.dataset.entryId = entryId;
   optimizeForm.querySelector('[type="submit"]').disabled = !entry || pendingOptimizations.has(entryId);
-  document.getElementById("optimizeTarget").textContent = item.type === "series"
+  document.getElementById("optimizeTarget").textContent = wholeSeason ? `Otimizar temporada ${item.seasonNumber || 1} · ${item.episodes.length} episodios em ordem`
+    : item.type === "series"
     ? `Otimizar episodio ${entry?.episodeNumber || ""}` : "Otimizar este filme";
 }
+document.getElementById("optimizationScope").addEventListener("change", () => {
+  const item = state.library.find((media) => media.id === state.currentMediaId);
+  if (item) updateOptimizationTarget(item);
+});
 optimizeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const item = state.library.find((media) => media.id === state.currentMediaId);
-  const entryId = item?.type === "series" ? state.currentEpisodeId : item?.id;
+  const wholeSeason = item?.type === "series" && optimizeForm.elements.optimizationScope.value === "season";
+  const entryId = wholeSeason ? item.id : item?.type === "series" ? state.currentEpisodeId : item?.id;
   if (!entryId || pendingOptimizations.has(entryId)) return;
   const qualities = [...optimizeForm.querySelectorAll('[name="quality"]:checked')].map((input) => Number(input.value));
   if (!qualities.length) {
@@ -811,17 +819,19 @@ optimizeForm.addEventListener("submit", async (event) => {
   try {
     if (optimizeForm.elements.optimizationLocation.value === "local") {
       if (!window.MegaRoomLocal?.optimizeExisting) throw new Error("Recarregue a pagina para carregar o auxiliar local.");
-      const payload = await window.MegaRoomLocal.optimizeExisting(entryId, qualities, optimizeForm.elements.cpuProfile.value);
+      const payload = await window.MegaRoomLocal.optimizeExisting(entryId, qualities, optimizeForm.elements.cpuProfile.value, wholeSeason);
       if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = payload.message;
       return;
     }
-    const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/optimize`, {
+    const response = await fetch(`/api/${wholeSeason ? "series" : "media"}/${encodeURIComponent(entryId)}/optimize`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Falha ao solicitar otimizacao.");
-    const target = item.type === "series" ? item.episodes.find((episode) => episode.id === entryId) : item;
-    target.processing = payload.processing;
+    if (!wholeSeason) {
+      const target = item.type === "series" ? item.episodes.find((episode) => episode.id === entryId) : item;
+      target.processing = payload.processing;
+    }
     if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = payload.message;
   } catch (error) {
     if (optimizeForm.dataset.entryId === entryId) optimizeMessage.textContent = error.message;

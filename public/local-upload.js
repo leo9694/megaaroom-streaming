@@ -7,6 +7,7 @@
   let pollTimer;
   let canDelete = false;
   let canOptimizeExisting = false;
+  let canOptimizeSeason = false;
   let helperVersion = 0;
   const panel = document.createElement("details");
   panel.className = "processing-options local-helper-panel";
@@ -149,6 +150,7 @@
     helperVersion = Number(health.version) || 1;
     canDelete = health.features?.includes("delete-failed") || false;
     canOptimizeExisting = health.features?.includes("optimize-existing") || false;
+    canOptimizeSeason = health.features?.includes("optimize-season") || false;
     if (health.features?.includes("resource-profiles")) {
       try { renderSettings(await request("/settings")); }
       catch (error) { resourceSelect.disabled = true; resourceMessage.textContent = error.message; }
@@ -167,11 +169,15 @@
     polling = true;
     try {
       const jobs = await request("/jobs");
-      const visible = new Set(jobs.slice(-20).map((job) => job.id));
+      const pendingJobs = jobs.filter((job) => !["done", "error"].includes(job.status)).slice(0, 20);
+      const historySlots = 20 - pendingJobs.length;
+      const history = historySlots ? jobs.filter((job) => ["done", "error"].includes(job.status)).slice(-historySlots) : [];
+      const visibleJobs = [...pendingJobs, ...history];
+      const visible = new Set(visibleJobs.map((job) => job.id));
       for (const [id, view] of jobCards) {
         if (!visible.has(id)) { view.card.remove(); jobCards.delete(id); transferSamples.delete(id); }
       }
-      for (const job of jobs.slice(-20).reverse()) {
+      for (const job of visibleJobs) {
         let view = jobCards.get(job.id);
         if (!view) { view = progressCard(job.title); jobCards.set(job.id, view); jobsList.append(view.card); }
         const uploading = job.status === "uploading";
@@ -288,21 +294,22 @@
       finally { button.disabled = false; }
     }, true);
   }
-  window.MegaRoomLocal = { async optimizeExisting(entryId, qualities, profile) {
+  window.MegaRoomLocal = { async optimizeExisting(entryId, qualities, profile, wholeSeason = false) {
     localControls.classList.remove("hidden"); localControls.append(panel); panel.open = true;
     await connect();
     if (!canOptimizeExisting) throw new Error(`O auxiliar aberto responde como v${helperVersion}; esta funcao exige v3 ou superior. Feche a janela do auxiliar e abra novamente Iniciar-MegaRoom.cmd. Se continuar na versao antiga, baixe e execute novamente o instalador.`);
-    const response = await fetch(`/api/media/${encodeURIComponent(entryId)}/local-ticket`, {
+    if (wholeSeason && !canOptimizeSeason) throw new Error(`O auxiliar conectado e v${helperVersion}. Atualize e reabra o auxiliar v4 para enfileirar uma temporada inteira.`);
+    const response = await fetch(`/api/${wholeSeason ? "series" : "media"}/${encodeURIComponent(entryId)}/${wholeSeason ? "local-tickets" : "local-ticket"}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities })
     });
     const ticket = await response.json();
     if (!response.ok) throw new Error(ticket.error || "Falha ao autorizar otimizacao local.");
     if (ticket.ready) return ticket;
-    await request("/jobs/from-server", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket, profile }) });
+    await request(wholeSeason ? "/jobs/from-season" : "/jobs/from-server", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(wholeSeason ? { tickets: ticket.tickets, profile } : { ticket, profile }) });
     renderSettings(await request("/settings"));
     say("Otimizacao iniciada no PC: o auxiliar baixara o original e enviara as qualidades prontas para a mesma midia. Mantenha o PC e o auxiliar ligados.");
     poll();
-    return { message: "Na fila do PC. Acompanhe abaixo o download, processamento e envio. Ao concluir, reabra o video para usar as qualidades." };
+    return { message: wholeSeason ? `${ticket.tickets.length} episodio(s) na fila do PC, na ordem 1, 2, 3... Acompanhe abaixo cada episodio.` : "Na fila do PC. Acompanhe abaixo o download, processamento e envio. Ao concluir, reabra o video para usar as qualidades." };
   } };
   if (key && window.isSecureContext) connect().catch(() => {});
 })();

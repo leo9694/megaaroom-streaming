@@ -272,6 +272,7 @@
                     <summary class="mini-btn">Otimizar video</summary>
                     <form id="optimizeForm" class="upload-form">
                       <p id="optimizeTarget">Otimizar este filme</p>
+                      <label id="optimizeScopeField" class="hidden"><span>O que otimizar</span><select name="optimizationScope" id="optimizationScope"><option value="episode">Somente este episodio</option><option value="season">Temporada inteira (1, 2, 3...)</option></select></label>
                       <label><span>Onde otimizar</span><select name="optimizationLocation" id="optimizationLocation"><option value="server">Na VPS</option><option value="local">Neste computador</option></select></label>
                       <label id="optimizeResourceField" class="hidden"><span>Uso de CPU do PC</span><select name="cpuProfile" id="optimizeResource"><option value="economy">Economico</option><option value="balanced" selected>Equilibrado</option><option value="fast">Rapido</option><option value="maximum">Maximo</option></select></label>
                       <fieldset class="processing-qualities">

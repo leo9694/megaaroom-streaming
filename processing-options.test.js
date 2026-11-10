@@ -101,6 +101,20 @@ test("saved settings control renditions and disabled mode only copies video", as
       const originalCall = calls.find((args) => args.at(-1).includes("original-audio-"));
       assert.equal(originalCall[originalCall.indexOf("-c:v") + 1], "copy");
       assert.equal((await (await fetch(playbackUrl)).json()).playbackType, "hls");
+      await api.updateLibrary((stored) => {
+        stored.items.find((item) => item.id === series.id).episodes = [10, 2, 1].map((number) => ({
+          ...series.episodes[0], id: `episode_123_test${number}`, episodeNumber: number
+        }));
+      });
+      context.batchOrder = [];
+      vm.runInContext("enqueuePreparationForEntry = async (id) => { batchOrder.push(id); }", context);
+      const batchResponse = await fetch(`http://127.0.0.1:${listener.address().port}/api/series/${series.id}/optimize`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [480] })
+      });
+      assert.equal(batchResponse.status, 202);
+      const batch = await batchResponse.json();
+      assert.deepEqual(batch.queued, ["episode_123_test1", "episode_123_test2", "episode_123_test10"]);
+      assert.deepEqual(Array.from(context.batchOrder), batch.queued);
     } finally {
       listener.closeAllConnections();
       await new Promise((resolve) => listener.close(resolve));

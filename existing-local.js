@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const express = require("express");
 const multer = require("multer");
 const { parseProcessing } = require("./processing-options");
+const { orderedEpisodes } = require("./episode-order");
 const { artifactPath, verifyPlaylists, validateAnalysis } = require("./local-import");
 
 function mergeMasters(previous, incoming, entryId, batch) {
@@ -43,30 +44,62 @@ function createExistingLocal({ root, readLibrary, updateLibrary, findEntryById, 
   }
   const isReserved = (entryId) => (reservations.get(entryId)?.expires || 0) > Date.now();
   const save = (id, data) => fsp.writeFile(path.join(ticketsDir, id + ".json"), JSON.stringify(data), { mode: 0o600 });
-  const ticket = async (req, res) => {
-    const entryId = req.params.entryId;
-    if (busy(entryId) || isReserved(entryId)) return res.status(409).json({ error: "Esta midia ja tem uma otimizacao pendente." });
+  const issueTicket = async (entryId, qualities, alreadyReserved = false) => {
+    if (!alreadyReserved && (busy(entryId) || isReserved(entryId))) return { status: 409, payload: { error: "Esta midia ja tem uma otimizacao pendente." } };
     reservations.set(entryId, { expires: Date.now() + 60000 });
     let reserved = false;
     try {
-      const processing = parseProcessing({ enabled: true, qualities: req.body?.qualities });
+      const processing = parseProcessing({ enabled: true, qualities });
       const entry = findEntryById(await readLibrary(), entryId);
-      if (!entry) return res.status(404).json({ error: "Midia nao encontrada." });
+      if (!entry) return { status: 404, payload: { error: "Midia nao encontrada." } };
       const analysis = await analyzePlayback(entry);
       const selected = getHlsRenditions(analysis, processing);
-      if (!selected.length) return res.status(422).json({ error: "Escolha qualidades iguais ou inferiores ao original." });
+      if (!selected.length) return { status: 422, payload: { error: "Escolha qualidades iguais ou inferiores ao original." } };
       const master = path.join(root, "streams", entryId, "hls", "master.m3u8");
       const existing = readHlsQualities(master);
-      if (selected.every((quality) => existing.includes(quality.height))) return res.json({ ready: true, message: "As qualidades selecionadas ja estao prontas." });
+      if (selected.every((quality) => existing.includes(quality.height))) return { status: 200, payload: { ready: true, message: "As qualidades selecionadas ja estao prontas." } };
       const id = crypto.randomBytes(24).toString("hex");
       const token = crypto.randomBytes(32).toString("hex");
       const saved = { entryId, sourceSrc: entry.sourceSrc, token, expires: Date.now() + 7 * 86400000, processing };
       await save(id, saved);
       reservations.set(entryId, { id, expires: saved.expires }); reserved = true;
-      res.json({ id, token, qualities: processing.qualities, title: entry.title,
-        filename: path.basename(entry.sourceSrc), entryId });
-    } catch (error) { res.status(400).json({ error: "Nao foi possivel preparar a otimizacao local: " + error.message }); }
+      return { status: 200, payload: { id, token, qualities: processing.qualities, title: entry.title,
+        filename: path.basename(entry.sourceSrc), entryId, episodeNumber: entry.episode?.episodeNumber } };
+    } catch (error) { return { status: 400, payload: { error: "Nao foi possivel preparar a otimizacao local: " + error.message } }; }
     finally { if (!reserved) reservations.delete(entryId); }
+  };
+  const ticket = async (req, res) => {
+    const result = await issueTicket(req.params.entryId, req.body?.qualities);
+    res.status(result.status).json(result.payload);
+  };
+  const seasonTickets = async (req, res) => {
+    const issued = [];
+    let episodes = [];
+    try {
+      parseProcessing({ enabled: true, qualities: req.body?.qualities });
+      const season = (await readLibrary()).items.find((item) => item.id === req.params.mediaId && item.type === "series");
+      if (!season) return res.status(404).json({ error: "Temporada nao encontrada." });
+      const ordered = orderedEpisodes(season);
+      if (ordered.some((episode) => busy(episode.id) || isReserved(episode.id))) return res.status(409).json({ error: "Um episodio da temporada ja tem otimizacao pendente." });
+      episodes = ordered;
+      episodes.forEach((episode) => reservations.set(episode.id, { expires: Date.now() + 60000 }));
+      const skipped = [];
+      for (const episode of episodes) {
+        const result = await issueTicket(episode.id, req.body.qualities, true);
+        if (result.payload.ready || result.status === 422) { skipped.push(episode.id); continue; }
+        if (result.status !== 200) throw new Error(result.payload.error);
+        issued.push(result.payload);
+      }
+      res.json({ tickets: issued, skipped, ready: issued.length === 0,
+        message: issued.length ? `${issued.length} episodio(s) autorizado(s), na ordem numerica.` : "Nenhum episodio precisa das qualidades selecionadas." });
+    } catch (error) {
+      for (const item of issued) {
+        const file = JSON.parse(await fsp.readFile(path.join(ticketsDir, item.id + ".json"), "utf8"));
+        file.expires = 0; await save(item.id, file);
+      }
+      episodes.forEach((episode) => reservations.delete(episode.id));
+      res.status(400).json({ error: "Nao foi possivel preparar a temporada: " + error.message });
+    }
   };
   const transfer = express.Router();
   transfer.use("/:id", async (req, res, next) => {
@@ -162,6 +195,6 @@ function createExistingLocal({ root, readLibrary, updateLibrary, findEntryById, 
       res.status(400).json({ error: "Otimizacao local incompleta: " + error.message });
     } finally { transfers.delete(id); }
   });
-  return { ticket, transfer, isReserved };
+  return { ticket, seasonTickets, transfer, isReserved };
 }
 module.exports = { createExistingLocal, mergeMasters };

@@ -26,7 +26,7 @@ test("upload can select only 720p and catalogue refresh preserves optimization c
   context.optimizeForm = optimizeForm;
   context.optimizeMessage = {};
   context.pendingOptimizations = new Set();
-  context.document = { getElementById: () => ({}) };
+  context.document = { getElementById: () => ({ classList: { toggle() {} }, addEventListener() {} }) };
   const helperStart = source.indexOf("function updateOptimizationTarget(");
   vm.runInContext(source.slice(helperStart, source.indexOf('optimizeForm.addEventListener("submit"', helperStart)), context);
   context.updateOptimizationTarget({ type: "movie", id: "movie", processing: { enabled: true, qualities: [480, 720, 1080] } });

@@ -1,5 +1,6 @@
 const express = require("express");
 const { parseProcessing, entryProcessing } = require("./processing-options");
+const { orderedEpisodes } = require("./episode-order");
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -165,6 +166,7 @@ app.use(["/uploads", "/streams"], (req, res) => res.status(404).send("Arquivo de
 app.use(express.static(path.join(ROOT, "public")));
 app.post("/api/local-import/ticket", localImport.ticket);
 app.post("/api/media/:entryId/local-ticket", existingLocal.ticket);
+app.post("/api/series/:mediaId/local-tickets", existingLocal.seasonTickets);
 
 async function readLibrary() {
   const raw = await fsp.readFile(LIBRARY_FILE, "utf8");
@@ -1176,6 +1178,45 @@ function enqueuePreparationForEntry(entryId) {
 
 const optimizationRequests = new Set();
 
+app.post("/api/series/:mediaId/optimize", async (req, res) => {
+  let locked = [];
+  try {
+    const processing = parseProcessing({ enabled: true, qualities: req.body?.qualities });
+    const library = await readLibrary();
+    const season = library.items.find((item) => item.id === req.params.mediaId && item.type === "series");
+    if (!season) return res.status(404).json({ error: "Temporada nao encontrada." });
+    const episodes = orderedEpisodes(season);
+    if (episodes.some((episode) => optimizationRequests.has(episode.id) || queuedPreparationJobs.has(episode.id) || hlsJobs.has(episode.id) || existingLocal.isReserved(episode.id))) {
+      return res.status(409).json({ error: "Um episodio desta temporada ja esta na fila. Aguarde concluir antes de iniciar a temporada." });
+    }
+    locked = episodes.map((episode) => episode.id);
+    locked.forEach((id) => optimizationRequests.add(id));
+    const plans = [];
+    const skipped = [];
+    for (const episode of episodes) {
+      const analysis = await analyzePlayback(findEntryById(library, episode.id));
+      const selected = getHlsRenditions(analysis, processing);
+      const existing = readHlsQualities(getHlsPaths(episode.id).masterPath);
+      if (!selected.length || selected.every((rendition) => existing.includes(rendition.height))) {
+        skipped.push(episode.id); continue;
+      }
+      plans.push({ id: episode.id, processing: { enabled: true, qualities: [...new Set([...processing.qualities, ...existing.filter((height) => [480, 720, 1080].includes(height))])] } });
+    }
+    await updateLibrary((current) => {
+      for (const plan of plans) {
+        const entry = findEntryById(current, plan.id);
+        if (!entry) throw new Error("Um episodio foi removido durante a solicitacao.");
+        entry.episode.processing = plan.processing;
+      }
+    });
+    // Register the complete sorted season before yielding to another request.
+    for (const plan of plans) enqueuePreparationForEntry(plan.id).catch(() => {});
+    res.status(plans.length ? 202 : 200).json({ queued: plans.map((plan) => plan.id), skipped,
+      message: plans.length ? `${plans.length} episodio(s) na fila da VPS, na ordem numerica. ${skipped.length} ja pronto(s) ou sem qualidade elegivel.` : "Nenhum episodio precisa das qualidades selecionadas." });
+  } catch (error) { res.status(400).json({ error: "Nao foi possivel otimizar a temporada: " + error.message }); }
+  finally { locked.forEach((id) => optimizationRequests.delete(id)); }
+});
+
 app.post("/api/media/:entryId/optimize", async (req, res) => {
   const { entryId } = req.params;
   if (optimizationRequests.has(entryId) || queuedPreparationJobs.has(entryId) || hlsJobs.has(entryId) || existingLocal.isReserved(entryId)) {
@@ -1286,7 +1327,7 @@ app.get("/api/playback/:entryId", async (req, res) => {
     const expectedQualities = getHlsRenditions(analysis, entryProcessing(entry)).map((rendition) => rendition.height);
     if (!expectedQualities.length) hls = { status: "disabled", percent: 0, qualities: [], source: null };
     const needsQualityUpgrade = expectedQualities.some((height) => !hls.qualities.includes(height));
-    if (expectedQualities.length && (hls.status === "idle" || needsQualityUpgrade)) {
+    if (expectedQualities.length && !optimizationRequests.has(entry.entryId) && (hls.status === "idle" || needsQualityUpgrade)) {
       enqueuePreparationForEntry(entry.entryId).catch(() => {});
       hls = getHlsSnapshot(entry.entryId);
     }

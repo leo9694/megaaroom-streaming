@@ -140,7 +140,7 @@ async function createHelper({ origin, root, key, engine }) {
     if (req.get("x-local-key") !== key) return res.sendStatus(401);
     next();
   });
-  app.use(express.json({ limit: "100kb" }));
+  app.use(express.json({ limit: "1mb" }));
   const binaries = async () => {
     try {
       await execFile(require("ffmpeg-static"), ["-version"], { windowsHide: true });
@@ -148,7 +148,7 @@ async function createHelper({ origin, root, key, engine }) {
       return true;
     } catch { return false; }
   };
-  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 3, features: ["resource-profiles", "delete-failed", "optimize-existing"] }));
+  app.get("/health", async (req, res) => res.json({ ffmpeg: await binaries(), version: 4, features: ["resource-profiles", "delete-failed", "optimize-existing", "optimize-season"] }));
   app.get("/settings", (req, res) => res.json(settings()));
   app.post("/settings", (req, res) => {
     if (!profiles.some((item) => item.id === req.body?.profile)) return res.status(400).json({ error: "Perfil invalido." });
@@ -273,6 +273,40 @@ async function createHelper({ origin, root, key, engine }) {
         entries: [], files: [], status: "queued", message: "Na fila para baixar o original." };
       jobs.set(job.id, job); persist(job); start(job); res.status(202).json(snapshot(job));
     } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  app.post("/jobs/from-season", async (req, res) => {
+    const created = [];
+    try {
+      if (!await binaries()) return res.status(503).json({ error: "Instale o FFmpeg pelo instalador do auxiliar." });
+      const tickets = req.body?.tickets;
+      if (!Array.isArray(tickets) || !tickets.length || tickets.length > 100) throw new Error("Temporada invalida.");
+      if (req.body.profile && !profiles.some((item) => item.id === req.body.profile)) throw new Error("Perfil invalido.");
+      for (const ticket of tickets) {
+        if (!ticket || !/^[a-f0-9]{48}$/.test(ticket.id) || !/^[a-f0-9]{64}$/.test(ticket.token) ||
+          typeof ticket.filename !== "string" || typeof ticket.title !== "string" || !(Number(ticket.episodeNumber) > 0)) throw new Error("Autorizacao de episodio invalida.");
+        parseProcessing({ enabled: true, qualities: ticket.qualities });
+      }
+      if (new Set(tickets.map((ticket) => ticket.id)).size !== tickets.length) throw new Error("Episodio duplicado.");
+      if (req.body.profile) {
+        fs.writeFileSync(settingsFile + ".tmp", JSON.stringify({ profile: req.body.profile }));
+        fs.renameSync(settingsFile + ".tmp", settingsFile); profile = req.body.profile;
+      }
+      const batch = [];
+      for (const ticket of [...tickets].sort((a, b) => Number(a.episodeNumber) - Number(b.episodeNumber))) {
+        const previous = [...jobs.values()].find((job) => job.ticket.id === ticket.id);
+        if (previous) { batch.push(previous); continue; }
+        const job = { id: crypto.randomBytes(16).toString("hex"), title: ticket.title,
+          ticket: { id: ticket.id, token: ticket.token }, remote: { filename: path.basename(ticket.filename), qualities: ticket.qualities, episodeNumber: ticket.episodeNumber },
+          entries: [], files: [], status: "queued", message: `Episodio ${ticket.episodeNumber} na fila do PC.` };
+        jobs.set(job.id, job); created.push(job); persist(job); batch.push(job);
+      }
+      // All jobs are persisted and queued synchronously in numeric episode order.
+      created.forEach((job) => start(job));
+      res.status(202).json({ jobs: batch.map(snapshot), message: "Temporada na fila do PC, na ordem dos episodios." });
+    } catch (error) {
+      for (const job of created) { job.status = "error"; job.message = error.message; persist(job); }
+      res.status(400).json({ error: error.message });
+    }
   });
   app.post("/jobs", async (req, res, next) => {
     if (!await binaries()) return res.status(503).json({ error: "FFmpeg ausente. Execute novamente o instalador do auxiliar." });

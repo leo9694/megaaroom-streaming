@@ -32,8 +32,9 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
   const previousRoot = process.env.MEGAROOM_MEDIA_ROOT;
   const previousMode = process.env.NODE_ENV;
   const logs = [];
+  const downloads = [];
   try {
-    vps = spawn(process.execPath, ["-e", 'const app=require("./server").app; const s=app.listen(0,"127.0.0.1",()=>process.send(s.address().port)); s.requestTimeout=0;'], {
+    vps = spawn(process.execPath, ["-e", 'const app=require("./server").app; const s=app.listen(0,"127.0.0.1",()=>process.send(s.address().port)); s.requestTimeout=0; s.on("request",req=>{const url=req.originalUrl||req.url;if(url.endsWith("/source"))process.send({source:url})});'], {
       cwd: __dirname, env: { ...process.env, MEGAROOM_MEDIA_ROOT: remote, APP_USERNAME: "test", APP_PASSWORD: "secret" },
       stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true
     });
@@ -43,6 +44,7 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
       vps.once("message", resolve); vps.once("error", reject); vps.once("exit", (code) => reject(new Error("VPS exited " + code + logs.join(""))));
     });
     const origin = `http://127.0.0.1:${port}`;
+    vps.on("message", (message) => { if (message.source) downloads.push(message.source); });
     const credentials = { Authorization: "Basic " + Buffer.from("test:secret").toString("base64") };
     const ticketResponse = await fetch(origin + "/api/local-import/ticket", { method: "POST", headers: { ...credentials, "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "movie", count: 1, title: "PC fixture", qualities: [480] }) });
@@ -174,6 +176,32 @@ test("PC converts real video, uploads to authenticated VPS and publishes ready m
     const finalCatalogue = await (await fetch(origin + "/api/library", { headers: credentials })).json();
     assert.equal(finalCatalogue.items.length, 3, "Reoptimization must not create duplicate movies");
     assert.equal(finalCatalogue.items.find((item) => item.id === entryId).video.src, correctSource);
+    // Scramble storage order: both server tickets and the PC must sort numerically.
+    const savedSeason = JSON.parse(await fs.readFile(libraryPath, "utf8"));
+    savedSeason.items.find((item) => item.id === season.id).episodes.reverse();
+    await fs.writeFile(libraryPath, JSON.stringify(savedSeason));
+    const seasonAuthorization = await fetch(origin + `/api/series/${season.id}/local-tickets`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [720] }) });
+    assert.equal(seasonAuthorization.status, 200);
+    const seasonBatch = await seasonAuthorization.json();
+    assert.deepEqual(seasonBatch.tickets.map((ticket) => ticket.episodeNumber), [1, 2]);
+    downloads.length = 0;
+    const orderedSubmission = await fetch(base + "/jobs/from-season", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ tickets: [...seasonBatch.tickets].reverse(), profile: "economy" }) });
+    assert.equal(orderedSubmission.status, 202, await orderedSubmission.text());
+    for (let i = 0; i < 250; i++) {
+      const active = await (await fetch(base + "/jobs", { headers })).json();
+      const pending = active.find((job) => job.status !== "done");
+      if (!pending) break;
+      assert.notEqual(pending.status, "error", pending.message);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.deepEqual(downloads, seasonBatch.tickets.map((ticket) => `/api/local-import/transfer/existing/${ticket.id}/source`));
+    for (const episode of season.episodes) {
+      const ready = await (await fetch(origin + `/api/playback/${episode.id}`, { headers: credentials })).json();
+      assert.deepEqual(ready.qualities, [720, 480]);
+    }
+    const completedSeason = await (await fetch(origin + `/api/series/${season.id}/local-tickets`, { method: "POST", headers: { ...credentials, "Content-Type": "application/json" }, body: JSON.stringify({ qualities: [720] }) })).json();
+    assert.equal(completedSeason.ready, true);
+    assert.deepEqual(completedSeason.tickets, []);
     assert.ok(!logs.some((line) => line.includes("[HLS] inicio")), "VPS must not encode existing local jobs either");
     assert.equal((await fs.readdir(path.join(pc, "uploads"))).length, 0, "Completed local input must be cleaned");
   } finally {

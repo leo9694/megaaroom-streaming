@@ -2,6 +2,17 @@
 
 ## Local PC helper
 
+For series, the post-upload optimization form offers the selected episode or
+the entire stored season. Season jobs are sorted by numeric episodeNumber
+(1, 2, 3, ..., 10), regardless of catalogue array order. VPS requests register
+all eligible entries on the shared sequential queue in one operation. Local
+requests reserve the season and issue one scoped ticket per eligible episode;
+helper v4 accepts the complete batch, persists it and queues it numerically.
+The batch continues after page reload. Ready/unsupported episodes are skipped.
+One failed episode is shown independently and does not stop later queue items.
+CPU profiles and quality selection apply to the selected batch. Initial local
+upload processing and individual post-upload optimization remain supported.
+
 The existing-media optimization form also offers VPS/local and CPU profile
 selection, even for uploads originally sent with processing disabled. The local
 helper v3 downloads only the authorized original, prepares selected HLS outputs,
