@@ -1,7 +1,7 @@
 const express = require("express");
 const { parseProcessing, entryProcessing } = require("./processing-options");
 const { orderedEpisodes } = require("./episode-order");
-const { cleanupMediaFiles, mediaIds } = require("./media-cleanup");
+const { catalogueReferences, cleanupMediaFiles, mediaIds, recoverMediaStorage } = require("./media-cleanup");
 const { validateNewEpisodes, appendEpisodes } = require("./season-episodes");
 const { createUploadCleanup, finishUpload } = require("./upload-cleanup");
 const crypto = require("crypto");
@@ -43,7 +43,10 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(STREAMS_DIR, { recursive: true });
 
 if (!fs.existsSync(LIBRARY_FILE)) {
-  fs.writeFileSync(LIBRARY_FILE, JSON.stringify({ items: [] }, null, 2));
+  if (fs.readdirSync(UPLOADS_DIR).length || fs.readdirSync(STREAMS_DIR).length) {
+    throw new Error("Catalogo ausente com arquivos de midia presentes. Restaure data/library.json antes de iniciar.");
+  }
+  fs.writeFileSync(LIBRARY_FILE, JSON.stringify({ items: [] }, null, 2), { flag: "wx" });
 }
 
 let libraryWriteQueue = Promise.resolve();
@@ -101,7 +104,7 @@ const coverStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     readLibrary()
       .then((library) => {
-        const item = library.items.find((entry) => entry.id === req.params.id);
+        const item = library.items.find((entry) => entry.id === req.params.id && !entry.deletionPending && !deletingEntries.has(entry.id));
         if (!item) {
           cb(new Error("MEDIA_NOT_FOUND"));
           return;
@@ -192,7 +195,14 @@ async function readLibrary() {
 }
 
 async function writeLibrary(data) {
-  await fsp.writeFile(LIBRARY_FILE, JSON.stringify(data, null, 2));
+  const temporary = LIBRARY_FILE + ".tmp";
+  try {
+    await fsp.writeFile(temporary, JSON.stringify(data, null, 2));
+    await fsp.rename(temporary, LIBRARY_FILE);
+  } catch (error) {
+    await fsp.rm(temporary, { force: true }).catch((cleanupError) => console.error("[CATALOGO] limpeza:", cleanupError.message));
+    throw error;
+  }
 }
 
 function updateLibrary(mutator) {
@@ -1568,18 +1578,25 @@ app.post("/api/media/:id/cover", (req, res, next) => {
     return res.status(400).json({ error: "Selecione uma imagem de capa." });
   }
 
-  const updated = await updateLibrary((library) => {
-    const item = library.items.find((entry) => entry.id === req.params.id);
-    if (!item) {
-      return null;
-    }
+  const discardCover = () => fsp.rm(coverFile.path, { force: true }).catch((error) => console.error("[CAPA] limpeza:", error.message));
+  let updated;
+  try {
+    updated = await updateLibrary((library) => {
+      const item = library.items.find((entry) => entry.id === req.params.id && !entry.deletionPending && !deletingEntries.has(entry.id));
+      if (!item) return null;
 
-    const previousCoverPath = item.cover?.src ? srcToAbsolutePath(item.cover.src) : null;
-    item.cover = coverToData(coverFile);
-    return { item, previousCoverPath };
-  });
+      const previousCoverPath = item.cover?.src ? srcToAbsolutePath(item.cover.src) : null;
+      item.cover = coverToData(coverFile);
+      return { item, previousCoverPath };
+    });
+  } catch (error) {
+    await discardCover();
+    console.error("[CAPA] catalogo:", error.message);
+    return res.status(500).json({ error: "Nao foi possivel salvar a capa." });
+  }
 
   if (!updated) {
+    await discardCover();
     return res.status(404).json({ error: "Mídia não encontrada." });
   }
 
@@ -1590,42 +1607,71 @@ app.post("/api/media/:id/cover", (req, res, next) => {
   res.status(200).json({ item: updated.item });
 });
 
+async function finishMediaDeletion(mediaId) {
+  // Serialize shared-folder checks with catalogue changes and other deletions.
+  const ids = await updateLibrary(async (library) => {
+    const item = library.items.find((entry) => entry.id === mediaId && entry.deletionPending);
+    if (!item) return [];
+    const ids = mediaIds(item);
+    const remaining = library.items.filter((other) => other.id !== item.id);
+    await cleanupMediaFiles(ROOT, item, removeDirectoryIfExists, remaining);
+    await progressStore.remove(ids);
+    library.items = remaining;
+    return ids;
+  });
+  existingLocal.forgetEntries(ids);
+  for (const id of ids) {
+    hlsStatus.delete(id); queuedPreparationJobs.delete(id);
+    for (const map of [analysisCache, prepareStatus, subtitleStatus]) {
+      for (const key of map.keys()) if (key.startsWith(id + ":")) map.delete(key);
+    }
+  }
+}
+
 app.delete("/api/media/:id", async (req, res) => {
   try {
-    const library = await readLibrary();
-    const item = library.items.find((entry) => entry.id === req.params.id);
-    if (!item) return res.status(404).json({ error: "Midia nao encontrada." });
-    const ids = mediaIds(item);
-    if ([...activeEpisodeUploads.values()].includes(item.id) || localImport.isTransferring(item.localImportId) || localImport.isTargetTransferring(item.id) || ids.some((id) => existingLocal.isTransferring(id) || optimizationRequests.has(id))) {
-      return res.status(409).json({ error: "Aguarde a transferencia ou solicitacao de otimizacao terminar e tente apagar novamente." });
-    }
-    ids.forEach((id) => deletingEntries.add(id));
-    await updateLibrary((current) => {
-      const record = current.items.find((entry) => entry.id === item.id);
-      if (record) record.deletionPending = true;
+    const ids = await updateLibrary((current) => {
+      const record = current.items.find((entry) => entry.id === req.params.id);
+      if (!record) return null;
+      const ids = mediaIds(record);
+      if ([...activeEpisodeUploads.values()].includes(record.id) || localImport.isTransferring(record.localImportId) || localImport.isTargetTransferring(record.id) || ids.some((id) => existingLocal.isTransferring(id) || optimizationRequests.has(id))) {
+        throw new Error("Aguarde a transferencia ou solicitacao de otimizacao terminar e tente apagar novamente.");
+      }
+      record.deletionPending = true;
+      ids.forEach((id) => deletingEntries.add(id));
+      return ids;
     });
+    if (!ids) return res.status(404).json({ error: "Midia nao encontrada." });
     const processes = ids.flatMap((id) => [...(activeEncoders.get(id) || [])]);
     await Promise.all(processes.map((proc) => new Promise((resolve, reject) => {
       if (proc.exitCode !== null || proc.signalCode !== null) { resolve(); return; }
       const timer = setTimeout(() => reject(new Error("A conversao ainda esta encerrando. Tente apagar novamente.")), 10000);
       proc.once("close", () => { clearTimeout(timer); resolve(); }); proc.kill("SIGTERM");
     })));
-    await cleanupMediaFiles(ROOT, item, removeDirectoryIfExists, library.items.filter((other) => other.id !== item.id));
-    existingLocal.forgetEntries(ids);
-    await progressStore.remove(ids);
-    for (const id of ids) {
-      hlsStatus.delete(id); queuedPreparationJobs.delete(id);
-      for (const map of [analysisCache, prepareStatus, subtitleStatus]) {
-        for (const key of map.keys()) if (key.startsWith(id + ":")) map.delete(key);
-      }
-    }
-    await updateLibrary((current) => { current.items = current.items.filter((entry) => entry.id !== item.id); });
+    await finishMediaDeletion(req.params.id);
     res.status(204).send();
   } catch (error) {
     console.error("[MIDIA] exclusao:", error.message);
     res.status(409).json({ error: "Nao foi possivel concluir a limpeza. O cadastro foi mantido para tentar novamente. " + error.message });
   }
 });
+
+async function recoverInterruptedMedia() {
+  const library = await readLibrary();
+  catalogueReferences(library);
+  await fsp.rm(LIBRARY_FILE + ".tmp", { force: true });
+  for (const item of library.items.filter((entry) => entry.deletionPending)) {
+    try { await finishMediaDeletion(item.id); }
+    catch (error) { console.error(`[LIMPEZA] exclusao pendente ${item.id}: ${error.message}`); }
+  }
+  const current = await readLibrary();
+  const removed = await recoverMediaStorage(ROOT, current, removeDirectoryIfExists);
+  if (removed) console.log(`[LIMPEZA] ${removed} pasta(s) ou arquivo(s) residual(is) removido(s).`);
+  const { streams } = catalogueReferences(current);
+  const staleProgress = Object.keys(await progressStore.all()).filter((id) => !streams.has(id));
+  if (staleProgress.length) await progressStore.remove(staleProgress);
+  await fsp.rm(path.join(DATA_DIR, "progress.json.tmp"), { force: true });
+}
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(ROOT, "public", "index.html"));
@@ -1634,7 +1680,10 @@ app.get("*", (req, res) => {
 module.exports = { app, analyzePlayback, prepareHls, prepareVariant, prepareSubtitle, getHlsSnapshot,
   getPreparationSnapshot, getSubtitleSnapshot, buildMovieItem, buildSeriesItem, findEntryById };
 
-if (require.main === module) {
+async function startServer() {
+  // Recover before accepting requests; a live upload must never be treated as an orphan.
+  try { await recoverInterruptedMedia(); }
+  catch (error) { console.error(`[LIMPEZA] verificacao inicial interrompida: ${error.message}`); }
   const server = app.listen(PORT, () => {
     console.log(`Servidor rodando em http://localhost:${PORT}`);
     if (!accessProtectionEnabled) {
@@ -1644,3 +1693,5 @@ if (require.main === module) {
   // Multi-GB uploads may legitimately take longer than Node's default timeout.
   server.requestTimeout = 0;
 }
+
+if (require.main === module) startServer();

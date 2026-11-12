@@ -24,7 +24,7 @@ test("saved settings control renditions and disabled mode only copies video", as
     // Exercise server functions with isolated data and no listening HTTP server.
     vm.runInContext(source.slice(0, source.lastIndexOf("if (require.main")), context);
     const api = vm.runInContext(`({ buildMovieItem, buildSeriesItem, findEntryById,
-      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary, getPreparationSnapshot })`, context);
+      getHlsRenditions, prepareVariant, prepareHls, readHlsQualities, getHlsPaths, app, updateLibrary, getPreparationSnapshot, recoverInterruptedMedia })`, context);
     const disabled = { enabled: false, qualities: [] };
     const file = { path: path.join(folder, "uploads", "fixture.mkv"), originalname: "fixture.mkv" };
     const body = { title: "Test", processing: disabled };
@@ -89,6 +89,13 @@ test("saved settings control renditions and disabled mode only copies video", as
     assert.deepEqual(Array.from(api.readHlsQualities(api.getHlsPaths(entry.entryId).masterPath)), [720, 480]);
 
     await api.updateLibrary((stored) => { stored.items = library.items; });
+    const libraryPath = path.join(folder, "data", "library.json");
+    const beforeFailedSave = await fs.readFile(libraryPath, "utf8");
+    fileOps.rename = async () => { throw new Error("Simulated catalogue save failure"); };
+    await assert.rejects(api.updateLibrary((stored) => { stored.items = []; }), /Simulated catalogue save failure/);
+    assert.equal(await fs.readFile(libraryPath, "utf8"), beforeFailedSave);
+    await assert.rejects(fs.stat(libraryPath + ".tmp"), { code: "ENOENT" });
+    fileOps.rename = fs.rename;
     context.testAnalysis = analysis;
     vm.runInContext("analyzePlayback = async () => testAnalysis; enqueuePreparationForEntry = async () => {}", context);
     const listener = api.app.listen(0, "127.0.0.1");
@@ -173,6 +180,23 @@ test("saved settings control renditions and disabled mode only copies video", as
       assert.equal((await fetch(deletionUrl, { method: "DELETE" })).status, 204);
       const deleted = JSON.parse(await fs.readFile(path.join(folder, "data", "library.json"), "utf8"));
       assert.equal(deleted.items.some((item) => item.id === series.id), false);
+
+      const sharedFolder = "1785424000000_abcdef12";
+      const duplicateId = "movie_1785424000001_abc123";
+      const sourceFolder = path.join(folder, "uploads", sharedFolder);
+      await fs.mkdir(sourceFolder);
+      await fs.writeFile(path.join(sourceFolder, "movie.mkv"), "fixture");
+      await api.updateLibrary((stored) => {
+        const first = stored.items.find((item) => item.id === movie.id);
+        Object.assign(first, { folder: sharedFolder, deletionPending: true });
+        stored.items.push({ ...first, id: duplicateId });
+      });
+      await fs.writeFile(path.join(folder, "data", "progress.json"), JSON.stringify({ [movie.id]: { position: 1 }, stale: { position: 2 } }));
+      await api.recoverInterruptedMedia();
+      assert.deepEqual(JSON.parse(await fs.readFile(libraryPath, "utf8")).items, []);
+      await assert.rejects(fs.stat(sourceFolder), { code: "ENOENT" });
+      await assert.rejects(fs.stat(path.join(folder, "streams", movie.id)), { code: "ENOENT" });
+      assert.deepEqual(JSON.parse(await fs.readFile(path.join(folder, "data", "progress.json"), "utf8")), {});
     } finally {
       listener.closeAllConnections();
       await new Promise((resolve) => listener.close(resolve));

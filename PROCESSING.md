@@ -180,8 +180,16 @@ new tracks from that attempt and preserves previously published streams.
 Deleting a movie or season removes originals, covers, all episode batches,
 prepared audio, subtitles, HLS, local-import tickets and watch progress. If files
 cannot be removed, deletion reports an error and keeps the catalogue record for
-retry. Shared originals referenced by another item are preserved. This does not
-scan or purge historical orphan folders, or guarantee cleanup after an abrupt
-process/host crash. Keep originals needed for Original playback and later
-optimization. Failed helper jobs on the PC intentionally retain retry files
-until the user selects Delete failure; these are distinct from VPS temporaries.
+retry. Shared originals are preserved until the last catalogue reference is
+removed. Catalogue writes use an atomic replacement, so a failed write leaves
+the last committed version available.
+
+Before accepting traffic at startup, the server retries pending deletions and
+removes app-named orphan folders and known partial outputs from interrupted
+uploads/encodes. It preserves catalogue references and unrecognized folders;
+it refuses to initialize an empty catalogue over existing media if the
+catalogue is missing. If a file is still locked, cleanup logs the failure for
+retry. Run a single server instance per media root. Originals remain available
+for Original playback and later optimization. Failed helper jobs on the PC
+intentionally retain retry files until Delete failure; these are distinct from
+VPS temporaries.

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { cleanupMediaFiles } = require("./media-cleanup");
+const { cleanupMediaFiles, recoverMediaStorage } = require("./media-cleanup");
 
 test("season cleanup removes every episode, partial output and ticket, preserving unrelated media", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "megaaroom-cleanup-"));
@@ -42,5 +42,46 @@ test("movie deletion removes cover, original, audio, subtitles and optimized ver
       await fs.rm(folder, { recursive: true, force: true }); return true;
     });
     for (const file of files) await assert.rejects(fs.stat(path.join(root, file)), { code: "ENOENT" });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("restart cleans orphan media and interrupted work without touching published files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "megaaroom-recovery-"));
+  const movie = "movie_1785424000000_abc123";
+  const upload = "1785424000000_abcdef12";
+  const local = "local-" + "a".repeat(48);
+  const episode = "episode_1785424000001_def123";
+  const removed = [
+    "uploads/1785424000002_abcdef12/partial.mkv",
+    "streams/episode_1785424000002_abc123/hls/720p/segment.m4s",
+    `uploads/${local}/prepared/partial.m4s`,
+    `streams/${movie}/.hls-tmp/480p/segment.m4s`,
+    `streams/${movie}/.local-${"a".repeat(48)}/partial.mp4`,
+    `streams/${movie}/audio-stream-1.mp4.tmp.mp4`,
+    `streams/${movie}/subtitles/subtitle-1.vtt.tmp.vtt`,
+    `streams/${movie}/hls/master.m3u8.tmp`
+  ];
+  const kept = [
+    `uploads/${upload}/movie.mkv`, `uploads/${local}/originals/episode.mkv`,
+    `streams/${movie}/audio-stream-1.mp4`, `streams/${movie}/subtitles/subtitle-1.vtt`,
+    `streams/${movie}/hls/master.m3u8`, `streams/${episode}/audio-stream-1.mp4`,
+    "streams/manual-backup/video.mp4"
+  ];
+  try {
+    for (const file of [...removed, ...kept]) {
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.writeFile(path.join(root, file), "fixture");
+    }
+    const removeDirectory = async (folder) => { await fs.rm(folder, { recursive: true, force: true }); return true; };
+    await assert.rejects(recoverMediaStorage(root, { items: [{}] }, removeDirectory), /ID invalido/);
+    for (const file of removed) await fs.access(path.join(root, file));
+    const library = { items: [
+      { id: movie, video: { src: `/uploads/${upload}/movie.mkv` } },
+      { id: "series_1785424000001_abc123", episodes: [{ id: episode, folder: local }] }
+    ] };
+    assert.equal(await recoverMediaStorage(root, library, removeDirectory), removed.length);
+    for (const file of removed) await assert.rejects(fs.stat(path.join(root, file)), { code: "ENOENT" });
+    for (const file of kept) await fs.access(path.join(root, file));
+    assert.equal(await recoverMediaStorage(root, library, removeDirectory), 0);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

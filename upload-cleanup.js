@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { uploadFolders } = require("./media-cleanup");
 
 function createUploadCleanup({ root, readLibrary, removeDirectory, logger = console }) {
   const uploads = path.resolve(root, "uploads") + path.sep;
@@ -12,8 +13,7 @@ function createUploadCleanup({ root, readLibrary, removeDirectory, logger = cons
         const folder = path.resolve(uploads, req.uploadFolderName);
         if (!folder.startsWith(uploads)) throw new Error("Pasta fora de uploads.");
         const library = await readLibrary();
-        const referenced = library.items.some((item) => item.folder === req.uploadFolderName ||
-          item.uploadFolders?.includes(req.uploadFolderName) || item.episodes?.some((episode) => episode.folder === req.uploadFolderName));
+        const referenced = library.items.some((item) => uploadFolders(item).includes(req.uploadFolderName));
         if (!referenced && !await removeDirectory(folder)) throw new Error("Nao foi possivel remover upload incompleto.");
       })().catch((error) => logger.error("[UPLOAD] limpeza:", error.message)).finally(() => { cleaning = null; });
       return cleaning;
